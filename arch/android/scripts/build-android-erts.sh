@@ -17,7 +17,12 @@ NDK_ROOT="${ANDROID_NDK_ROOT:-}"
 if [ -z "$NDK_ROOT" ]; then
     NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
 fi
-TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+case "$(uname -s)" in
+    Darwin) HOST_TAG="darwin-x86_64" ;;
+    Linux) HOST_TAG="linux-x86_64" ;;
+    *) echo "unsupported host OS: $(uname -s)" >&2; exit 1 ;;
+esac
+TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 
 require_tool curl
 require_tool make

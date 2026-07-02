@@ -14,7 +14,12 @@ PRUNE_OTP_APPS="${PRUNE_OTP_APPS:-common_test debugger dialyzer diameter edoc el
 if [ -z "$NDK_ROOT" ]; then
     NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
 fi
-TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+case "$(uname -s)" in
+    Darwin) HOST_TAG="darwin-x86_64" ;;
+    Linux) HOST_TAG="linux-x86_64" ;;
+    *) echo "unsupported host OS: $(uname -s)" >&2; exit 1 ;;
+esac
+TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 
 require_tool zip
 require_tool python3
@@ -22,7 +27,125 @@ require_tool erlc
 require_tool cargo
 require_tool rustc
 
+patch_hyperbuddy_bundle() {
+    local bundle
+    for bundle in \
+        "$ANDEE_DEVICE_ROOT/_build/default/lib/hb/src/core/html/hyperbuddy@1.0/bundle.js" \
+        "$ANDEE_DEVICE_ROOT/_build/default/lib/hb/priv/html/hyperbuddy@1.0/bundle.js"
+    do
+        [ -f "$bundle" ] || continue
+        python3 - <<'PY' "$bundle"
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+declaration = "var lodash$1={exports:{}};"
+lodash_needle = "var lodash=lodash$1.exports,hasRequiredLodash;"
+url_helper = (
+    "function stripUrlProtocol(eA){return String(eA==null?\"\":eA)"
+    ".replace(/^[a-z][a-z0-9+.-]*:\\/\\//i,\"\")"
+    ".replace(/^\\/\\//,\"\");}"
+)
+fetch_helper = (
+    "async function hbFetch(eA,AA){AA=AA||{};"
+    "const tA=await fetch(eA);"
+    "if(!tA.ok)throw new Error(`HTTP ${tA.status} ${tA.statusText}`);"
+    "return AA.json?await tA.json():await tA.text();}"
+    "async function getDeviceNames(){try{const eA=await hbFetch(HB_ENDPOINTS.devices,{json:!0,rawBodyOnly:!0});"
+    "return Object.keys(eA||{});}catch(eA){return [];}}"
+)
+ui_helper = (
+    "function checkValidAddress(eA){return typeof eA===\"string\"&&/^[A-Za-z0-9_-]{43}$/.test(eA);}"
+    "function formatAddress(eA,AA){if(typeof eA!==\"string\")return \"\";"
+    "if(AA||eA.length<=16)return eA;"
+    "return `${eA.slice(0,6)}...${eA.slice(-6)}`;}"
+    "function formatCount(eA){const AA=Number(eA);"
+    "if(!Number.isFinite(AA))return String(eA);"
+    "const tA=Math.abs(AA);"
+    "if(tA>=1e9)return (AA/1e9).toFixed(1).replace(/\\.0$/,\"\")+\"B\";"
+    "if(tA>=1e6)return (AA/1e6).toFixed(1).replace(/\\.0$/,\"\")+\"M\";"
+    "if(tA>=1e3)return (AA/1e3).toFixed(1).replace(/\\.0$/,\"\")+\"K\";"
+    "return Number.isInteger(AA)?String(AA):AA.toFixed(2).replace(/\\.00$/,\"\");}"
+)
+address_helper = (
+    "function formatAddress(eA,AA){if(typeof eA!==\"string\")return \"\";"
+    "if(AA||eA.length<=16)return eA;"
+    "return `${eA.slice(0,6)}...${eA.slice(-6)}`;}"
+)
+buffer_alias = "var Buffer$1$1=requireDist$1().Buffer;"
+buffer_alias_needle = "async function signature("
+url_helper_needle = "const UPDATE_CURRENT_POST="
+if declaration in text:
+    lodash_patched = text
+elif lodash_needle in text:
+    lodash_patched = text.replace(lodash_needle, declaration + lodash_needle, 1)
+else:
+    raise SystemExit(f"missing Hyperbuddy lodash marker in {path}")
+if "function stripUrlProtocol(" in lodash_patched:
+    patched = lodash_patched
+elif url_helper_needle in lodash_patched:
+    patched = lodash_patched.replace(url_helper_needle, url_helper + url_helper_needle, 1)
+else:
+    raise SystemExit(f"missing Hyperbuddy URL helper marker in {path}")
+if "function hbFetch(" not in patched:
+    if url_helper_needle not in patched:
+        raise SystemExit(f"missing Hyperbuddy fetch helper marker in {path}")
+    patched = patched.replace(url_helper_needle, fetch_helper + url_helper_needle, 1)
+if "function checkValidAddress(" not in patched:
+    if url_helper_needle not in patched:
+        raise SystemExit(f"missing Hyperbuddy UI helper marker in {path}")
+    patched = patched.replace(url_helper_needle, ui_helper + url_helper_needle, 1)
+if "function formatAddress(" not in patched:
+    if url_helper_needle not in patched:
+        raise SystemExit(f"missing Hyperbuddy address helper marker in {path}")
+    patched = patched.replace(url_helper_needle, address_helper + url_helper_needle, 1)
+if buffer_alias not in patched:
+    if buffer_alias_needle not in patched:
+        raise SystemExit(f"missing Hyperbuddy Buffer alias marker in {path}")
+    patched = patched.replace(buffer_alias_needle, buffer_alias + buffer_alias_needle, 1)
+if patched != text:
+    path.write_text(patched)
+PY
+    done
+}
+
+stage_lapee_p4_scripts() {
+    local overlay_p4="$ANDEE_DEVICE_OVERLAY_ROOT/priv/lapee-p4"
+    local hb_app="$ANDEE_DEVICE_ROOT/_build/default/lib/hb"
+    local token_source p4_source
+
+    if [ -f "$overlay_p4/hyper-token.lua" ]; then
+        token_source="$overlay_p4/hyper-token.lua"
+    else
+        token_source="$hb_app/scripts/hyper-token.lua"
+    fi
+    if [ -f "$overlay_p4/hyper-token-p4.lua" ]; then
+        p4_source="$overlay_p4/hyper-token-p4.lua"
+    else
+        p4_source="$hb_app/scripts/hyper-token-p4.lua"
+    fi
+
+    if [ ! -f "$token_source" ]; then
+        echo "missing LapEE P4 token script: $token_source" >&2
+        exit 1
+    fi
+    if [ ! -f "$p4_source" ]; then
+        echo "missing LapEE P4 extension script: $p4_source" >&2
+        exit 1
+    fi
+
+    mkdir -p "$WORK/priv/lapee-p4" "$WORK/scripts" "$hb_app/priv/lapee-p4"
+    cp "$token_source" "$WORK/priv/lapee-p4/hyper-token.lua"
+    cp "$p4_source" "$WORK/priv/lapee-p4/hyper-token-p4.lua"
+    cp "$token_source" "$WORK/scripts/hyper-token.lua"
+    cp "$p4_source" "$WORK/scripts/hyper-token-p4.lua"
+    cp "$token_source" "$hb_app/priv/lapee-p4/hyper-token.lua"
+    cp "$p4_source" "$hb_app/priv/lapee-p4/hyper-token-p4.lua"
+}
+
 "$ROOT/scripts/stage-android-devices.sh"
+patch_hyperbuddy_bundle
 
 for clang in aarch64-linux-android29-clang x86_64-linux-android29-clang llvm-strip; do
     if [ ! -x "$TOOLCHAIN/$clang" ]; then
@@ -143,6 +266,8 @@ if [ -d "$ANDEE_DEVICE_ROOT/priv" ]; then
     cp -a "$ANDEE_DEVICE_ROOT/priv" "$WORK/priv"
 fi
 (cd "$ANDEE_DEVICE_ROOT" && "$REBAR3" compile)
+patch_hyperbuddy_bundle
+stage_lapee_p4_scripts
 HB_SCHEMA="$ANDEE_DEVICE_ROOT/_build/default/lib/hb/scripts/schema.gql"
 if [ ! -f "$HB_SCHEMA" ]; then
     echo "missing HyperBEAM GraphQL schema: $HB_SCHEMA" >&2
