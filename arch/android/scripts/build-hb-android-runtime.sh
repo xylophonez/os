@@ -55,18 +55,20 @@ fetch_helper = (
     "async function getDeviceNames(){try{const eA=await hbFetch(HB_ENDPOINTS.devices,{json:!0,rawBodyOnly:!0});"
     "return Object.keys(eA||{});}catch(eA){return [];}}"
 )
+format_count_helper = (
+    "function formatCount(eA){const AA=Number(eA);"
+    "if(!Number.isFinite(AA))return String(eA);"
+    "const tA=String(eA==null?\"\":eA),rA=tA.includes(\".\");"
+    "const iA=rA?AA.toFixed(2).replace(/\\.00$/,\"\").replace(/(\\.\\d)0$/,\"$1\"):String(Math.round(AA));"
+    "const nA=iA.split(\".\"),oA=nA[0].replace(/\\B(?=(\\d{3})+(?!\\d))/g,\",\");"
+    "return nA.length>1?oA+\".\"+nA[1]:oA;}"
+)
 ui_helper = (
     "function checkValidAddress(eA){return typeof eA===\"string\"&&/^[A-Za-z0-9_-]{43}$/.test(eA);}"
+    + format_count_helper +
     "function formatAddress(eA,AA){if(typeof eA!==\"string\")return \"\";"
     "if(AA||eA.length<=16)return eA;"
     "return `${eA.slice(0,6)}...${eA.slice(-6)}`;}"
-    "function formatCount(eA){const AA=Number(eA);"
-    "if(!Number.isFinite(AA))return String(eA);"
-    "const tA=Math.abs(AA);"
-    "if(tA>=1e9)return (AA/1e9).toFixed(1).replace(/\\.0$/,\"\")+\"B\";"
-    "if(tA>=1e6)return (AA/1e6).toFixed(1).replace(/\\.0$/,\"\")+\"M\";"
-    "if(tA>=1e3)return (AA/1e3).toFixed(1).replace(/\\.0$/,\"\")+\"K\";"
-    "return Number.isInteger(AA)?String(AA):AA.toFixed(2).replace(/\\.00$/,\"\");}"
 )
 address_helper = (
     "function formatAddress(eA,AA){if(typeof eA!==\"string\")return \"\";"
@@ -76,6 +78,47 @@ address_helper = (
 buffer_alias = "var Buffer$1$1=requireDist$1().Buffer;"
 buffer_alias_needle = "async function signature("
 url_helper_needle = "const UPDATE_CURRENT_POST="
+
+def replace_js_function(source: str, name: str, replacement: str) -> str:
+    start = source.find(f"function {name}(")
+    if start < 0:
+        return source
+    body_start = source.find("{", start)
+    if body_start < 0:
+        return source
+    depth = 0
+    in_string = None
+    escaped = False
+    template_expr_depth = 0
+    for idx in range(body_start, len(source)):
+        char = source[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if in_string == "`" and char == "$" and idx + 1 < len(source) and source[idx + 1] == "{":
+                template_expr_depth += 1
+                continue
+            if char == in_string and template_expr_depth == 0:
+                in_string = None
+                continue
+            if in_string == "`" and char == "}" and template_expr_depth > 0:
+                template_expr_depth -= 1
+                continue
+            continue
+        if char in ("'", '"', "`"):
+            in_string = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return source[:start] + replacement + source[idx + 1:]
+    return source
+
 if declaration in text:
     lodash_patched = text
 elif lodash_needle in text:
@@ -96,6 +139,7 @@ if "function checkValidAddress(" not in patched:
     if url_helper_needle not in patched:
         raise SystemExit(f"missing Hyperbuddy UI helper marker in {path}")
     patched = patched.replace(url_helper_needle, ui_helper + url_helper_needle, 1)
+patched = replace_js_function(patched, "formatCount", format_count_helper)
 if "function formatAddress(" not in patched:
     if url_helper_needle not in patched:
         raise SystemExit(f"missing Hyperbuddy address helper marker in {path}")
