@@ -25,7 +25,6 @@ import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -156,6 +155,18 @@ private class OrnamentView(
         fun terminate()
     }
 
+    private data class TapCluster(
+        val x: Float,
+        val y: Float,
+        val startedAt: Long,
+        val salt: Int,
+        val impact: Float,
+        val lifetime: Float,
+        val particleCount: Int,
+        val spin: Float,
+        val paletteShift: Int,
+    )
+
     private val mono = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
     private val nodeStatus = AtomicReference(NodeStatus.booting())
     private val nextBootConfigPending = AtomicBoolean(AndeeBootConfigStore.hasPending(context))
@@ -164,28 +175,31 @@ private class OrnamentView(
     private var pollerThread: Thread? = null
     private var animationFramePending = false
     private var startedAt = System.nanoTime()
+    private var logoRevealStartedAt = 0L
+    private var configTouchActive = false
+    private var tapClusterSalt = 0
     private var cachedQrUrl = ""
     private var cachedQrRows = QrV2L.rowsFor("http://<node>:8734/")
-    private var phoneRows: List<String> = emptyList()
     private var qrBitmap: Bitmap? = null
     private var qrBitmapStatus: NodeStatus? = null
     private var qrBitmapPending = false
     private val configButtonBounds = RectF()
     private val clipBounds = Rect()
     private val clipBoundsF = RectF()
-    private val phoneDirty = Rect()
+    private val animationDirty = Rect()
+    private val ambientBounds = RectF()
+    private val tapClusters = mutableListOf<TapCluster>()
 
     private var layoutWidth = 0
     private var layoutHeight = 0
     private var greeterTextSize = 0f
     private var greeterLineHeight = 0f
+    private var greeterCellWidth = 0f
     private var greeterMargin = 0f
     private var greeterTopMargin = 0f
     private var greeterBottom = 0f
-    private var phoneTextSize = 0f
-    private var phoneLineHeight = 0f
-    private var phoneX = 0f
-    private var phoneTop = 0f
+    private var ambientCodeTextSize = 0f
+    private var ambientSparkleTextSize = 0f
     private val qrDrawBounds = RectF()
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -193,8 +207,7 @@ private class OrnamentView(
         typeface = mono
         isSubpixelText = true
     }
-    private val phonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+    private val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = mono
         isSubpixelText = true
     }
@@ -209,7 +222,7 @@ private class OrnamentView(
         override fun run() {
             animationFramePending = false
             if (!presentationActive.get()) return
-            if (updatePhoneFrame(force = false)) invalidatePhone()
+            invalidateAmbient()
             scheduleAnimationFrame()
         }
     }
@@ -233,7 +246,9 @@ private class OrnamentView(
 
     fun resumePresentation() {
         startedAt = System.nanoTime()
-        updatePhoneFrame(force = true)
+        logoRevealStartedAt = startedAt
+        configTouchActive = false
+        tapClusters.clear()
         if (presentationActive.compareAndSet(false, true)) startPoller()
         invalidate()
         scheduleAnimationFrame()
@@ -278,9 +293,10 @@ private class OrnamentView(
 
         val status = nodeStatus.get()
         drawBackground(canvas)
+        if (Rect.intersects(clipBounds, animationDirty)) drawAmbient(canvas)
         if (clipBounds.top < greeterBottom) drawGreeter(canvas)
-        if (Rect.intersects(clipBounds, phoneDirty)) drawPhone(canvas)
         if (RectF.intersects(qrDrawBounds, clipBoundsF)) drawQr(canvas, status)
+        drawTapClusters(canvas)
     }
 
     private fun pollNode() {
@@ -315,17 +331,17 @@ private class OrnamentView(
         postDelayed(animationTick, ANIMATION_FRAME_MS)
     }
 
-    private fun invalidatePhone() {
+    private fun invalidateAmbient() {
         if (width <= 0 || height <= 0) {
             invalidate()
             return
         }
         ensureLayout()
         postInvalidateOnAnimation(
-            phoneDirty.left,
-            phoneDirty.top,
-            phoneDirty.right,
-            phoneDirty.bottom,
+            animationDirty.left,
+            animationDirty.top,
+            animationDirty.right,
+            animationDirty.bottom,
         )
     }
 
@@ -342,82 +358,330 @@ private class OrnamentView(
         var size = (width / 58f).coerceIn(dp(10f), dp(21f))
         textPaint.typeface = mono
         textPaint.textSize = size
-        var maxLine = HYPERBEAM_GREETER.maxOf { textPaint.measureText(it) }
+        var cellWidth = measureLogoCellWidth(size)
+        var maxLine = cellWidth * logoColumnCount()
         val available = width - greeterMargin * 2f
         if (maxLine > available) {
             size *= available / maxLine
             textPaint.textSize = size
+            cellWidth = measureLogoCellWidth(size)
         }
         greeterTextSize = size
         greeterLineHeight = size * 1.08f
+        greeterCellWidth = cellWidth
         greeterBottom = greeterTopMargin + size + HYPERBEAM_GREETER.size * greeterLineHeight + size * 0.55f
-
-        val rows = PHONE_ROWS
-        val cols = PHONE_COLS
-        val availableHeight = height - greeterBottom
-        val sizeByWidth = width / (cols * 0.42f)
-        val sizeByHeight = availableHeight / (rows * 1.08f) * 1.18f
-        phoneTextSize = (min(sizeByWidth, sizeByHeight) * 0.86f).coerceIn(dp(18f), dp(76f))
-        phonePaint.typeface = mono
-        phonePaint.textSize = phoneTextSize
-        val charWidth = phonePaint.measureText("M")
-        phoneLineHeight = phoneTextSize * 1.08f
-        val blockWidth = charWidth * cols
-        phoneX = width * 0.62f - blockWidth * 0.50f
-        phoneTop = greeterBottom + dp(18f)
-        val phonePad = dp(18f)
-        phoneDirty.set(
-            floor(phoneX - phonePad).toInt().coerceAtLeast(0),
-            floor(phoneTop - phonePad).toInt().coerceAtLeast(0),
-            kotlin.math.ceil(phoneX + blockWidth + phonePad).toInt().coerceAtMost(width),
-            kotlin.math.ceil(phoneTop + rows * phoneLineHeight + phonePad).toInt().coerceAtMost(height),
-        )
 
         val moduleCount = cachedQrRows.size
         val target = min(width * 0.34f, height * 0.16f).coerceAtLeast(dp(132f))
         val modulePx = max(3, floor(target / moduleCount).toInt())
         val qrSize = (modulePx * moduleCount).toFloat()
-        val qrX = greeterMargin
         val qrY = height - qrSize - dp(126f)
+
+        ambientCodeTextSize = (width / 36f).coerceIn(dp(12f), dp(24f))
+        ambientSparkleTextSize = (width / 34f).coerceIn(dp(14f), dp(30f))
+        ambientBounds.set(0f, 0f, width.toFloat(), height.toFloat())
+        animationDirty.set(0, 0, width, height)
+
+        val qrX = greeterMargin
         qrDrawBounds.set(0f, qrY - dp(28f), width.toFloat(), qrY + qrSize + dp(74f))
     }
 
     private fun drawGreeter(canvas: Canvas) {
-        var y = greeterTopMargin + greeterTextSize
-
-        textPaint.color = Color.WHITE
-        textPaint.clearShadowLayer()
+        val progress = logoRevealProgress()
         textPaint.typeface = mono
         textPaint.textSize = greeterTextSize
+        textPaint.clearShadowLayer()
+
+        if (progress >= 0.985f) {
+            drawExactLogo(canvas, 1f)
+            return
+        }
+
+        drawLogoCloud(canvas, progress)
+        if (progress > 0.015f) drawMaterializingLogo(canvas, progress)
+    }
+
+    private fun drawAmbient(canvas: Canvas) {
+        val elapsed = elapsedSeconds()
+        val frame = floor(elapsed * BEAM_FPS).toInt()
+        val progress = logoRevealProgress()
+        drawLogoPassingWords(canvas, ambientBounds, elapsed, frame)
+        drawAmbientFuzz(canvas, ambientBounds, elapsed, frame, progress)
+    }
+
+    private fun elapsedSeconds(): Float =
+        ((System.nanoTime() - startedAt) / 1_000_000_000.0).toFloat()
+
+    private fun drawLogoCloud(canvas: Canvas, progress: Float) {
+        val elapsed = elapsedSeconds()
+        val frame = floor(elapsed * BEAM_FPS).toInt()
+        val charWidth = logoCharWidth()
+        val logoWidth = logoWidth()
+        val logoHeight = HYPERBEAM_GREETER.size * greeterLineHeight
+        val centerX = greeterMargin + logoWidth * 0.50f
+        val centerY = greeterTopMargin + greeterTextSize + logoHeight * 0.42f
+        val count = (96f * (1f - progress * 0.74f)).roundToInt().coerceAtLeast(18)
+        val alphaScale = (1f - progress * 0.92f).coerceIn(0f, 1f)
+
+        codePaint.typeface = mono
+        codePaint.isFakeBoldText = true
+        for (i in 0 until count) {
+            val local = hashUnit(i, frame, 0, 51)
+            codePaint.textSize = (greeterTextSize * (0.74f + local * 0.38f)).coerceAtLeast(dp(7f))
+            val x = centerX +
+                (hashUnit(i, 0, frame, 52) - 0.5f) * logoWidth * 0.88f +
+                sin(elapsed * (0.42f + local * 0.34f) + i) * charWidth * 0.62f
+            val y = centerY +
+                (hashUnit(i, 0, frame, 53) - 0.5f) * logoHeight * 1.06f +
+                sin(elapsed * (0.31f + local * 0.26f) + i * 1.7f) * greeterLineHeight * 0.42f
+            val ch = LOGO_FUZZ_CHARS[(hashUnit(i, frame, 0, 54) * LOGO_FUZZ_CHARS.size)
+                .toInt()
+                .coerceIn(0, LOGO_FUZZ_CHARS.lastIndex)]
+            val alpha = (0.08f + hashUnit(i, frame, 0, 55) * 0.22f) * alphaScale
+            codePaint.color = withAlpha(BEAM_COLORS[(i + frame / 3) % BEAM_COLORS.size], alpha)
+            canvas.drawText(ch.toString(), x, y, codePaint)
+        }
+        codePaint.isFakeBoldText = false
+    }
+
+    private fun drawMaterializingLogo(canvas: Canvas, progress: Float) {
+        codePaint.typeface = mono
+        codePaint.textSize = greeterTextSize
+        codePaint.isFakeBoldText = false
+
+        val charWidth = logoCharWidth()
+        val logoWidth = logoWidth()
+        val logoHeight = HYPERBEAM_GREETER.size * greeterLineHeight
+        val centerX = greeterMargin + logoWidth * 0.50f
+        val centerY = greeterTopMargin + greeterTextSize + logoHeight * 0.42f
+        val elapsed = elapsedSeconds()
+        val frame = floor(elapsed * BEAM_FPS).toInt()
+
+        for (row in HYPERBEAM_GREETER.indices) {
+            val line = HYPERBEAM_GREETER[row]
+            for (col in line.indices) {
+                val ch = line[col]
+                if (ch == ' ') continue
+                val delay = hashUnit(col, row, 0, 61) * 0.26f
+                val local = easeInOut(((progress - delay) / (1f - delay)).coerceIn(0f, 1f))
+                if (local <= 0f) continue
+
+                val targetX = greeterMargin + col * charWidth
+                val targetY = greeterTopMargin + greeterTextSize + row * greeterLineHeight
+                val startX = centerX + (hashUnit(col, row, 0, 62) - 0.5f) * logoWidth * 0.82f
+                val startY = centerY + (hashUnit(col, row, 0, 63) - 0.5f) * logoHeight * 1.10f
+                val jitter = (1f - local) * charWidth * 0.54f
+                val x = startX + (targetX - startX) * local + sin(elapsed * 1.7f + col) * jitter
+                val y = startY + (targetY - startY) * local + sin(elapsed * 1.2f + row * 2.1f) * jitter
+                val alpha = (local * (0.30f + hashUnit(col, row, frame, 64) * 0.50f)).coerceIn(0.04f, 0.86f)
+                codePaint.color = withAlpha(beamColor(row, col, frame), alpha)
+                canvas.drawText(ch.toString(), x, y, codePaint)
+            }
+        }
+
+        val exactAlpha = ((progress - 0.72f) / 0.28f).coerceIn(0f, 1f)
+        if (exactAlpha > 0f) drawExactLogo(canvas, exactAlpha)
+    }
+
+    private fun drawExactLogo(canvas: Canvas, alpha: Float) {
+        textPaint.typeface = mono
+        textPaint.textSize = greeterTextSize
+        textPaint.color = withAlpha(Color.WHITE, alpha)
+        textPaint.clearShadowLayer()
+        val charWidth = logoCharWidth()
+        for (row in HYPERBEAM_GREETER.indices) {
+            val y = greeterTopMargin + greeterTextSize + row * greeterLineHeight
+            val line = HYPERBEAM_GREETER[row]
+            for (col in line.indices) {
+                val ch = line[col]
+                if (ch == ' ') continue
+                canvas.drawText(ch.toString(), greeterMargin + col * charWidth, y, textPaint)
+            }
+        }
+    }
+
+    private fun drawAmbientFuzz(canvas: Canvas, area: RectF, elapsed: Float, frame: Int, progress: Float) {
+        val top = greeterBottom + dp(10f)
+        val bottom = (qrDrawBounds.top - dp(28f)).coerceAtLeast(top + dp(80f))
+
+        codePaint.typeface = mono
+        codePaint.isFakeBoldText = true
+        for (i in 0 until BEAM_PARTICLE_COUNT) {
+            val speed = 0.020f + hashUnit(i, 0, 0, 71) * 0.082f
+            val orbit = elapsed * speed + hashUnit(i, 0, 0, 72) * 6.28318f
+            val x = area.left + area.width() * hashUnit(i, 0, 0, 73) +
+                sin(orbit + i) * area.width() * (0.012f + hashUnit(i, 0, 0, 74) * 0.026f)
+            val y = top + (bottom - top) * hashUnit(i, 0, 0, 75) +
+                sin(orbit * (1.4f + hashUnit(i, 0, 0, 76)) + i) * dp(18f)
+            val ch = LOGO_FUZZ_CHARS[(hashUnit(i, frame, 0, 77) * LOGO_FUZZ_CHARS.size)
+                .toInt()
+                .coerceIn(0, LOGO_FUZZ_CHARS.lastIndex)]
+            val alpha = (0.035f + hashUnit(i, frame, 0, 78) * 0.10f) * (1f - progress * 0.36f)
+            codePaint.textSize = (ambientSparkleTextSize * (0.36f + hashUnit(i, 0, 0, 79) * 0.26f))
+                .coerceIn(dp(6f), dp(14f))
+            codePaint.color = withAlpha(BEAM_COLORS[(i + frame / 4) % BEAM_COLORS.size], alpha)
+            canvas.drawText(ch.toString(), x, y, codePaint)
+        }
+        codePaint.isFakeBoldText = false
+    }
+
+    private fun drawLogoPassingWords(canvas: Canvas, area: RectF, elapsed: Float, frame: Int) {
+        val previousSize = codePaint.textSize
+        val previousBold = codePaint.isFakeBoldText
+        codePaint.textSize = (ambientCodeTextSize * 0.58f).coerceIn(dp(8f), dp(13f))
+        codePaint.isFakeBoldText = true
+
+        val verticalTop = greeterBottom + dp(22f)
+        val verticalBottom = (qrDrawBounds.top - dp(48f)).coerceAtLeast(verticalTop + dp(120f))
+        val travelWidth = area.width() + dp(210f)
+        for (i in BEAM_WORDS.indices) {
+            val word = BEAM_WORDS[i]
+            val speed = BEAM_WORD_SPEEDS[i % BEAM_WORD_SPEEDS.size]
+            val phase = fract(elapsed * speed + i * 0.231f)
+            val wordWidth = codePaint.measureText(word)
+            val x = if (i % 2 == 0) {
+                area.right + dp(64f) - phase * (travelWidth + wordWidth)
+            } else {
+                area.left - wordWidth - dp(64f) + phase * (travelWidth + wordWidth)
+            }
+            val yBand = fract(i * 0.41421356f + 0.16f)
+            val y = verticalTop + (verticalBottom - verticalTop) * yBand +
+                sin(elapsed * (0.11f + i * 0.013f) + i) * dp(7f)
+            val alpha = (burstAlpha(phase) * 0.10f).coerceIn(0.01f, 0.10f)
+            codePaint.color = withAlpha(BEAM_COLORS[(i + frame / 5) % BEAM_COLORS.size], alpha)
+            canvas.drawText(word, x, y, codePaint)
+        }
+
+        codePaint.textSize = previousSize
+        codePaint.isFakeBoldText = previousBold
+    }
+
+    private fun spawnTapCluster(x: Float, y: Float) {
+        tapClusterSalt += 1
+        val salt = tapClusterSalt
+        val baseImpact = 0.55f + hashUnit(salt, x.roundToInt(), y.roundToInt(), 101) * 0.90f
+        val impactRoll = hashUnit(salt, x.roundToInt(), y.roundToInt(), 106)
+        val impact = when {
+            impactRoll > 0.96f -> 2.85f + hashUnit(salt, 0, 0, 107) * 0.55f
+            impactRoll > 0.82f -> 1.85f + hashUnit(salt, 0, 0, 108) * 0.75f
+            else -> baseImpact
+        }
+        val lifetime = 0.85f + impact * 0.42f + hashUnit(salt, 0, 0, 102) * 0.34f
+        val particleCount = (7f + impact * 9f + hashUnit(salt, 0, 0, 103) * 8f).roundToInt()
+        val spin = -1.55f + hashUnit(salt, 0, 0, 104) * 3.10f
+        val paletteShift = (hashUnit(salt, 0, 0, 105) * BEAM_COLORS.size).toInt()
+        tapClusters.add(TapCluster(x, y, System.nanoTime(), salt, impact, lifetime, particleCount, spin, paletteShift))
+        while (tapClusters.size > MAX_TAP_CLUSTERS) tapClusters.removeAt(0)
+        val pad = dp(42f + impact * 54f).roundToInt()
+        postInvalidateOnAnimation(
+            (x - pad).roundToInt().coerceAtLeast(0),
+            (y - pad).roundToInt().coerceAtLeast(0),
+            (x + pad).roundToInt().coerceAtMost(width),
+            (y + pad).roundToInt().coerceAtMost(height),
+        )
+    }
+
+    private fun drawTapClusters(canvas: Canvas) {
+        if (tapClusters.isEmpty()) return
+
+        val now = System.nanoTime()
+        val elapsed = elapsedSeconds()
+        val frame = floor(elapsed * BEAM_FPS).toInt()
+        tapClusters.removeAll { cluster ->
+            ((now - cluster.startedAt) / 1_000_000_000.0).toFloat() > cluster.lifetime
+        }
+        if (tapClusters.isEmpty()) return
+
+        codePaint.typeface = mono
+        codePaint.isFakeBoldText = true
+        for (cluster in tapClusters) {
+            val age = ((now - cluster.startedAt) / 1_000_000_000.0).toFloat()
+            val progress = (age / cluster.lifetime).coerceIn(0f, 1f)
+            val fade = (1f - progress) * (1f - progress)
+            val largeBias = ((cluster.impact - 1.45f) / 1.95f).coerceIn(0f, 1f)
+            val radius = dp((5f + largeBias * 22f + progress * (24f + cluster.impact * 32f)) * cluster.impact)
+            val count = (cluster.particleCount * (0.42f + fade * 0.78f)).roundToInt().coerceAtLeast(4)
+            for (i in 0 until count) {
+                val angle = hashUnit(i, cluster.salt, 0, 91) * 6.28318f +
+                    progress * (cluster.spin + i * 0.065f)
+                val distance = radius * (0.18f + hashUnit(i, cluster.salt, frame, 92) * 0.86f)
+                val wobble = sin(elapsed * (1.6f + i * 0.11f) + cluster.salt) *
+                    dp(1.6f + cluster.impact * 2.8f)
+                val x = cluster.x + kotlin.math.cos(angle) * distance + wobble
+                val y = cluster.y + sin(angle) * distance - progress * dp(6f + cluster.impact * 8f)
+                val tokenNoise = hashUnit(i, cluster.salt, frame, 93)
+                val token = if (tokenNoise > 0.72f && progress < 0.82f) {
+                    TAP_CLUSTER_TOKENS[((tokenNoise - 0.72f) / 0.28f * TAP_CLUSTER_TOKENS.size)
+                        .toInt()
+                        .coerceIn(0, TAP_CLUSTER_TOKENS.lastIndex)]
+                } else {
+                    LOGO_FUZZ_CHARS[(tokenNoise * LOGO_FUZZ_CHARS.size)
+                        .toInt()
+                        .coerceIn(0, LOGO_FUZZ_CHARS.lastIndex)].toString()
+                }
+                codePaint.textSize = (greeterTextSize *
+                    (0.55f + largeBias * 0.34f + hashUnit(i, cluster.salt, 0, 94) * 0.34f))
+                    .coerceIn(dp(6f), dp(22f))
+                val alpha = (0.12f + hashUnit(i, cluster.salt, frame, 95) * 0.48f) *
+                    fade *
+                    (0.72f + cluster.impact * 0.24f + largeBias * 0.70f)
+                codePaint.color = withAlpha(
+                    BEAM_COLORS[(i + cluster.paletteShift + frame / 3) % BEAM_COLORS.size],
+                    alpha,
+                )
+                canvas.drawText(token, x, y, codePaint)
+            }
+        }
+        codePaint.isFakeBoldText = false
+    }
+
+    private fun logoRevealProgress(): Float {
+        val start = logoRevealStartedAt
+        if (start == 0L) return 0f
+        val seconds = ((System.nanoTime() - start) / 1_000_000_000.0).toFloat()
+        return easeInOut((seconds / LOGO_REVEAL_SECONDS).coerceIn(0f, 1f))
+    }
+
+    private fun logoCharWidth(): Float {
+        if (greeterCellWidth > 0f) return greeterCellWidth
+        textPaint.typeface = mono
+        textPaint.textSize = greeterTextSize
+        return textPaint.measureText("M").coerceAtLeast(1f)
+    }
+
+    private fun logoWidth(): Float {
+        return logoCharWidth() * logoColumnCount()
+    }
+
+    private fun logoColumnCount(): Int =
+        HYPERBEAM_GREETER.maxOf { it.length }
+
+    private fun measureLogoCellWidth(size: Float): Float {
+        textPaint.typeface = mono
+        textPaint.textSize = size
+        var width = textPaint.measureText("M")
         for (line in HYPERBEAM_GREETER) {
-            canvas.drawText(line, greeterMargin, y, textPaint)
-            y += greeterLineHeight
+            for (ch in line) {
+                if (ch != ' ') width = max(width, textPaint.measureText(ch.toString()))
+            }
         }
+        return width.coerceAtLeast(1f)
     }
 
-    private fun drawPhone(canvas: Canvas) {
-        if (phoneRows.isEmpty()) updatePhoneFrame(force = true)
-        phonePaint.typeface = mono
-        phonePaint.textSize = phoneTextSize
-        phonePaint.color = Color.WHITE
-        phonePaint.setShadowLayer(dp(11f), 0f, 0f, Color.rgb(85, 229, 255))
-
-        for ((index, text) in phoneRows.withIndex()) {
-            canvas.drawText(text, phoneX, phoneTop + (index + 1) * phoneLineHeight, phonePaint)
-        }
-        phonePaint.clearShadowLayer()
+    private fun beamColor(row: Int, col: Int, frame: Int): Int {
+        val band = Math.floorMod((row * 3.2f + col * 1.45f + frame * 0.18f).toInt(), BEAM_COLORS.size)
+        return BEAM_COLORS[band]
     }
 
-    private fun updatePhoneFrame(force: Boolean): Boolean {
-        val elapsed = ((System.nanoTime() - startedAt) / 1_000_000_000.0).toFloat()
-        val nextRows = renderPhoneRows(elapsed)
-        if (!force && nextRows == phoneRows) return false
-        phoneRows = nextRows
-        return true
+    private fun easeInOut(value: Float): Float {
+        val t = value.coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
     }
 
-    private fun renderPhoneRows(elapsed: Float): List<String> =
-        renderPhoneGrid(elapsed).map { String(it) }
+    private fun hashUnit(a: Int, b: Int, c: Int, salt: Int): Float {
+        val value = sin(a * 12.9898f + b * 78.233f + c * 37.719f + salt * 19.19f) * 43758.5453f
+        return fract(value)
+    }
 
     private fun drawQr(canvas: Canvas, status: NodeStatus) {
         val bitmap = cachedQrBitmap(status)
@@ -498,7 +762,8 @@ private class OrnamentView(
         accentPaint.typeface = mono
         accentPaint.textSize = (width / 42f).coerceIn(dp(10f), dp(18f))
         accentPaint.color = Color.WHITE
-        val labelY = qrY + accentPaint.textSize
+        val controlY = height - dp(108f)
+        val labelY = controlY + accentPaint.textSize
         val labelText = "NODE URL"
 
         textPaint.typeface = mono
@@ -530,19 +795,35 @@ private class OrnamentView(
             canvas.drawText(line, labelX, textY, textPaint)
             textY += textPaint.textSize * 1.35f
         }
-        drawConfigButton(canvas, qrX, qrY + qrSize + dp(18f), qrSize)
+        drawConfigButton(canvas, qrX, controlY, qrSize)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val inside = configButtonBounds.contains(event.x, event.y)
-        if (event.action == MotionEvent.ACTION_DOWN && inside) return true
-        if (event.action == MotionEvent.ACTION_UP && inside) {
-            if (nextBootConfigPending.get()) {
-                actions.terminate()
-            } else {
-                actions.pickNextBootConfig()
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                configTouchActive = inside
+                return true
             }
-            return true
+            MotionEvent.ACTION_UP -> {
+                if (configTouchActive) {
+                    configTouchActive = false
+                    if (inside) {
+                        if (nextBootConfigPending.get()) {
+                            actions.terminate()
+                        } else {
+                            actions.pickNextBootConfig()
+                        }
+                    }
+                    return true
+                }
+                spawnTapCluster(event.x, event.y)
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                configTouchActive = false
+                return true
+            }
         }
         return super.onTouchEvent(event)
     }
@@ -569,128 +850,23 @@ private class OrnamentView(
         canvas.drawText(label, textX, textY, textPaint)
     }
 
-    private fun renderPhoneGrid(elapsed: Float): Array<CharArray> {
-        val cols = PHONE_COLS
-        val rows = PHONE_ROWS
-        val grid = Array(rows) { CharArray(cols) { ' ' } }
-        val yaw = elapsed * 0.82f
-        val pitch = -0.10f + sin(elapsed * 0.37f) * 0.05f
-        val scale = 8.15f
-        val cx = cols / 2f
-        val cy = rows / 2f + 1.35f
+    private fun burstAlpha(phase: Float): Float =
+        when {
+            phase < 0.18f -> phase / 0.18f
+            phase > 0.82f -> (1f - phase) / 0.18f
+            else -> 1f
+        }.coerceIn(0.18f, 1f)
 
-        for ((from, to) in phoneEdges()) {
-            val p1 = project(from, yaw, pitch, scale, cx, cy)
-            val p2 = project(to, yaw, pitch, scale, cx, cy)
-            drawAsciiLine(grid, p1.first, p1.second, p2.first, p2.second)
-        }
+    private fun fract(value: Float): Float =
+        value - floor(value)
 
-        return grid
-    }
-
-    private fun project(
-        point: Vec3,
-        yaw: Float,
-        pitch: Float,
-        scale: Float,
-        cx: Float,
-        cy: Float,
-    ): Pair<Int, Int> {
-        val cyaw = cos(yaw)
-        val syaw = sin(yaw)
-        val x1 = point.x * cyaw + point.z * syaw
-        val z1 = -point.x * syaw + point.z * cyaw
-
-        val cp = cos(pitch)
-        val sp = sin(pitch)
-        val y2 = point.y * cp - z1 * sp
-        val z2 = point.y * sp + z1 * cp
-
-        val tilt = 0.48f
-        val yView = y2 * cos(tilt) - z2 * sin(tilt)
-        val perspective = 1.0f / (1.0f + (z2 + 3.8f) * 0.035f)
-        val col = (cx + x1 * scale * perspective).roundToInt()
-        val row = (cy - yView * scale * 0.58f * perspective).roundToInt()
-        return col to row
-    }
-
-    private fun drawAsciiLine(grid: Array<CharArray>, x0: Int, y0: Int, x1: Int, y1: Int) {
-        val dxAbs = abs(x1 - x0)
-        val dyAbs = abs(y1 - y0)
-        val ch = when {
-            dyAbs * 2 < dxAbs -> '-'
-            dxAbs * 2 < dyAbs -> '|'
-            (x1 - x0) * (y1 - y0) > 0 -> '\\'
-            else -> '/'
-        }
-
-        var x = x0
-        var y = y0
-        val sx = if (x0 < x1) 1 else -1
-        val sy = if (y0 < y1) 1 else -1
-        var err = dxAbs - dyAbs
-        while (true) {
-            plot(grid, x, y, ch)
-            if (x == x1 && y == y1) break
-            val e2 = err * 2
-            if (e2 > -dyAbs) {
-                err -= dyAbs
-                x += sx
-            }
-            if (e2 < dxAbs) {
-                err += dxAbs
-                y += sy
-            }
-        }
-        plot(grid, x0, y0, '+')
-        plot(grid, x1, y1, '+')
-    }
-
-    private fun plot(grid: Array<CharArray>, x: Int, y: Int, ch: Char) {
-        if (y in grid.indices && x in grid[y].indices) {
-            grid[y][x] = ch
-        }
-    }
-
-    private fun phoneEdges(): List<Pair<Vec3, Vec3>> {
-        val xl = -1.62f
-        val xr = 1.62f
-        val yt = 3.75f
-        val yb = -3.75f
-        val zf = 0.22f
-        val zb = -0.22f
-        val front = listOf(
-            Vec3(xl, yt, zf),
-            Vec3(xr, yt, zf),
-            Vec3(xr, yb, zf),
-            Vec3(xl, yb, zf),
+    private fun withAlpha(color: Int, alpha: Float): Int =
+        Color.argb(
+            (alpha.coerceIn(0f, 1f) * 255f).roundToInt(),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color),
         )
-        val back = listOf(
-            Vec3(xl, yt, zb),
-            Vec3(xr, yt, zb),
-            Vec3(xr, yb, zb),
-            Vec3(xl, yb, zb),
-        )
-        val screen = listOf(
-            Vec3(-1.16f, 2.82f, zf + 0.03f),
-            Vec3(1.16f, 2.82f, zf + 0.03f),
-            Vec3(1.16f, -2.52f, zf + 0.03f),
-            Vec3(-1.16f, -2.52f, zf + 0.03f),
-        )
-        return buildList {
-            addLoop(front)
-            addLoop(back)
-            for (i in front.indices) add(front[i] to back[i])
-            addLoop(screen)
-            add(Vec3(-0.36f, 3.18f, zf + 0.04f) to Vec3(0.36f, 3.18f, zf + 0.04f))
-            add(Vec3(-0.24f, -3.10f, zf + 0.04f) to Vec3(0.24f, -3.10f, zf + 0.04f))
-            add(Vec3(0.52f, 3.20f, zf + 0.04f) to Vec3(0.58f, 3.20f, zf + 0.04f))
-        }
-    }
-
-    private fun MutableList<Pair<Vec3, Vec3>>.addLoop(points: List<Vec3>) {
-        for (i in points.indices) add(points[i] to points[(i + 1) % points.size])
-    }
 
     private fun fitToWidth(text: String, paint: Paint, maxWidth: Float): String {
         if (paint.measureText(text) <= maxWidth) return text
@@ -709,13 +885,39 @@ private class OrnamentView(
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
 
     companion object {
-        private val BACKGROUND = Color.rgb(3, 14, 46)
+        private val BACKGROUND = Color.rgb(21, 18, 58)
         private val TERMINATE_ORANGE = Color.rgb(164, 76, 0)
         private const val ANIMATION_FRAME_MS = 100L
         private const val BOOT_POLL_MS = 1_000L
         private const val STEADY_POLL_MS = 5_000L
-        private const val PHONE_COLS = 36
-        private const val PHONE_ROWS = 29
+        private const val BEAM_FPS = 12f
+        private const val LOGO_REVEAL_SECONDS = 1.85f
+        private const val BEAM_PARTICLE_COUNT = 22
+        private const val MAX_TAP_CLUSTERS = 28
+        private val BEAM_COLORS = intArrayOf(
+            Color.rgb(79, 255, 90),
+            Color.rgb(255, 230, 94),
+            Color.rgb(118, 221, 255),
+            Color.rgb(185, 92, 255),
+            Color.rgb(255, 72, 67),
+            Color.rgb(38, 170, 255),
+        )
+        private val LOGO_FUZZ_CHARS = charArrayOf('.', ':', '*', '+', '~', ';', '=')
+        private val TAP_CLUSTER_TOKENS = arrayOf(".", ":", "*", "+", "~", "::", "[]", "{}", "ao", "p4", "hb")
+        private val BEAM_WORDS = arrayOf(
+            "~arweave@2.9",
+            "~bundle@1.0",
+            "~json@1.0",
+            "~meta@1.0",
+            "~p4@1.0",
+            "~ao@1.0",
+        )
+        private val BEAM_WORD_SPEEDS = floatArrayOf(
+            0.010f,
+            0.014f,
+            0.021f,
+            0.032f,
+        )
         private val HYPERBEAM_GREETER = listOf(
             "\u2588\u2588\u2557  \u2588\u2588\u2557\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2557",
             "\u2588\u2588\u2551  \u2588\u2588\u2551\u255a\u2588\u2588\u2557 \u2588\u2588\u2554\u255d\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557",
@@ -732,8 +934,6 @@ private class OrnamentView(
         )
     }
 }
-
-private data class Vec3(val x: Float, val y: Float, val z: Float)
 
 private data class NodeStatus(
     val ready: Boolean,
