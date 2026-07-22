@@ -40,7 +40,7 @@ copy_device_tree() {
         for pattern in "${STAGING_DENYLIST[@]}"; do
             excludes+=(--exclude "$pattern")
         done
-        rsync -a "${excludes[@]}" \
+        rsync -a --checksum "${excludes[@]}" \
             "$src"/ "$ANDEE_DEVICE_ROOT"/
     else
         cp -a "$src"/. "$ANDEE_DEVICE_ROOT"/

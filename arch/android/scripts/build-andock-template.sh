@@ -43,6 +43,17 @@ sha256_file() {
     shasum -a 256 "$1" | awk '{print $1}'
 }
 
+case "$(uname -s)" in
+    Darwin)
+        stat_size() { stat -f %z "$1"; }
+        stat_blocks() { stat -f %b "$1"; }
+        ;;
+    *)
+        stat_size() { stat -c %s "$1"; }
+        stat_blocks() { stat -c %b "$1"; }
+        ;;
+esac
+
 mkdir -p "$DOWNLOADS"
 if [[ ! -f "$NODE_ARCHIVE" ]] || \
         [[ "$(sha256_file "$NODE_ARCHIVE")" != "$NODE_SHA256" ]]; then
@@ -113,17 +124,17 @@ docker exec \
     --env ANDEE_SPARSE_CONVERTER_SHA256="$SPARSE_CONVERTER_SHA256" \
     "$CONTAINER" bash /tmp/andock-build-template-inner
 
-if [[ "$(stat -f %z "$OUTPUT")" != "$IMAGE_BYTES" ]]; then
-    printf 'unexpected output size: %s\n' "$(stat -f %z "$OUTPUT")" >&2
+if [[ "$(stat_size "$OUTPUT")" != "$IMAGE_BYTES" ]]; then
+    printf 'unexpected output size: %s\n' "$(stat_size "$OUTPUT")" >&2
     exit 1
 fi
-HOST_BLOCKS="$(stat -f %b "$OUTPUT")"
+HOST_BLOCKS="$(stat_blocks "$OUTPUT")"
 printf 'template=%s\n' "$OUTPUT"
 printf 'template-sha256=%s\n' "$(sha256_file "$OUTPUT")"
-printf 'template-logical-bytes=%s\n' "$(stat -f %z "$OUTPUT")"
+printf 'template-logical-bytes=%s\n' "$(stat_size "$OUTPUT")"
 printf 'template-allocated-bytes-on-host=%s\n' "$((HOST_BLOCKS * 512))"
 printf 'android-sparse-image=%s\n' "$OUTPUT.simg"
 printf 'android-sparse-image-sha256=%s\n' \
     "$(sha256_file "$OUTPUT.simg")"
 printf 'android-sparse-image-bytes=%s\n' \
-    "$(stat -f %z "$OUTPUT.simg")"
+    "$(stat_size "$OUTPUT.simg")"

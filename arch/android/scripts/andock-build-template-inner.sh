@@ -194,8 +194,9 @@ if summary["representatives"]:
 PY
 umount "$FIXTURE/mounted"
 
-MKE2FS_VERSION="$(mke2fs -V 2>&1 | head -1)"
-MKE2FS_LIBRARY_VERSION="$(mke2fs -V 2>&1 | tail -1 | sed 's/^[[:space:]]*//')"
+MKE2FS_VERSION_OUTPUT="$(mke2fs -V 2>&1)"
+MKE2FS_VERSION="$(printf '%s\n' "$MKE2FS_VERSION_OUTPUT" | head -1)"
+MKE2FS_LIBRARY_VERSION="$(printf '%s\n' "$MKE2FS_VERSION_OUTPUT" | tail -1 | sed 's/^[[:space:]]*//')"
 MKE2FS_SHA256="$(sha256sum "$(command -v mke2fs)" | awk '{print $1}')"
 E2FSPROGS_VERSION="$(dpkg-query -W -f='${Version}' e2fsprogs)"
 PACKAGES_SHA256="$(sha256sum "$OUTPUT.packages.txt" | awk '{print $1}')"

@@ -16,7 +16,12 @@ EXPECTED_HYPERBEAM_VERSION="8b9105d7c1a8b2bd93fc050dfd093fa49b80b0be"
 if [ -z "$NDK_ROOT" ]; then
     NDK_ROOT="$ANDROID_SDK_ROOT/ndk/$NDK_VERSION"
 fi
-TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+case "$(uname -s)" in
+    Darwin) HOST_TAG="darwin-x86_64" ;;
+    Linux) HOST_TAG="linux-x86_64" ;;
+    *) echo "unsupported host OS: $(uname -s)" >&2; exit 1 ;;
+esac
+TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 
 require_tool zip
 require_tool python3
@@ -325,7 +330,7 @@ write_reproducible_hb_buildinfo() {
         echo "unexpected HyperBEAM source: $actual_version" >&2
         exit 1
     fi
-    source_epoch="$(git -C "$hb_app" show -s --format=%ct HEAD)"
+    source_epoch="$(git -C "$hb_app" -c log.showSignature=false show -s --format=%ct HEAD)"
     source_short="${actual_version:0:12}"
     mkdir -p "$hb_app/priv"
     printf '%s\n' \
