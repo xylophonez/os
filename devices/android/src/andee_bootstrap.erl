@@ -21,6 +21,7 @@ start() ->
 
 start(ConfigPath) ->
     ensure_preloaded_store(),
+    ensure_custom_store_modules(),
     io:format("andee-bootstrap=load-config path=~ts~n", [hb_util:bin(ConfigPath)]),
     Env = hb_opts:default_message_with_env(),
     Loaded =
@@ -77,6 +78,17 @@ ensure_preloaded_store() ->
         {ok, _} -> ok;
         {error, Reason} -> erlang:error({missing_andee_preloaded_store, Reason})
     end.
+
+%% @doc Load AndEE-provided store modules before the config is decoded. The
+%% config decoder turns each `store-module' string into an atom with
+%% `list_to_existing_atom', which only succeeds once the module's atom exists
+%% (i.e. once the module is loaded). Core store modules are already loaded;
+%% AndEE-custom ones referenced only from config must be ensured here.
+ensure_custom_store_modules() ->
+    lists:foreach(
+        fun(Module) -> catch code:ensure_loaded(Module) end,
+        [hb_store_andee_gateway_cache, hb_store_andee_encrypted]
+    ).
 
 start_store(Opts) ->
     Store = hb_opts:get(<<"store">>, no_store, Opts),
