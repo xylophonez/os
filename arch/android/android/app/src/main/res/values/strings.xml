@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">PermawebOS Node</string>
-    <string name="notification_channel">AndEE runtime</string>
-    <string name="notification_title">AndEE HyperBEAM node</string>
+    <string name="notification_channel">PermawebOS Node</string>
+    <string name="notification_title">PermawebOS node</string>
 </resources>

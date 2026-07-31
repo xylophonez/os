@@ -293,6 +293,7 @@ class AndeeService : Service() {
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(text)
             .setOngoing(true)
+            .setColor(if (offerCopy) COLOR_RUNNING else COLOR_PENDING)
         if (offerCopy) {
             val copyIntent = PendingIntent.getService(
                 this,
@@ -381,10 +382,15 @@ class AndeeService : Service() {
         private const val TAG = "AndeeService"
         private const val CHANNEL_ID = "andee-runtime"
         private const val NOTIFICATION_ID = 7341
-        private const val STATUS_STARTING = "Starting AndEE…"
-        private const val STATUS_LOCAL_ONLY = "Node running (no tunnel configured)"
-        private const val STATUS_CONNECTING = "Connecting tunnel…"
-        private const val STATUS_REACHABLE = "Node reachable"
+        // Leading dot is a status light: green when serving, amber while it
+        // comes up. Emoji render identically on every launcher, unlike a tinted
+        // small icon, which some OEM shells flatten to monochrome.
+        private const val STATUS_STARTING = "\uD83D\uDFE1 Starting…"
+        private const val STATUS_LOCAL_ONLY = "\uD83D\uDFE2 Running (local only)"
+        private const val STATUS_CONNECTING = "\uD83D\uDFE1 Connecting tunnel…"
+        private const val STATUS_REACHABLE = "\uD83D\uDFE2 Running"
+        private const val COLOR_RUNNING = 0xFF2ECC71.toInt()
+        private const val COLOR_PENDING = 0xFFF1C40F.toInt()
         private const val STATUS_BOOT_POLL_MS = 5_000L
         private const val STATUS_READY_POLL_MS = 60_000L
         private val NODE_STARTED_PATTERN =
