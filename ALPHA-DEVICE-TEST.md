@@ -55,14 +55,51 @@ from the request body (`target: body`) → bootstrap → recorded status. With t
 shipped default the hook reports `not-configured` and starts nothing, so it is
 safe to ship enabled.
 
-## Tunnel defect: the router 500s on larger responses
+## Tunnel defect: isolated to the `store` key
 
-Symptom: `~meta@1.0/info` through the public tunnel host never returns, while
-`info/address` and `info/port` return in ~5 s. Reproducible on every run.
+Symptom: `~meta@1.0/info` through the public tunnel never returns. Reproducible
+on every run.
 
-**This is a failure at the tunnel router, not on the phone.** An earlier
-revision of this report described it as a ~2 KiB response-size threshold. That
-was wrong, and is corrected here.
+**It is not a size limit and not the router.** Two earlier revisions of this
+report were wrong — first blaming a ~2 KiB response threshold, then the router
+— and both are corrected here.
+
+The failure is isolated to a single key. Through our own tunnel:
+
+| path | bytes | result |
+| --- | --- | --- |
+| `info/address` | 43 | 200 |
+| `info/port` | 4 | 200 |
+| `info/on` | 2221 | 200 |
+| `info/match-index` | 233 | 200 |
+| `info/arweave-index-store` | 371 | 200 |
+| `info/identities` | 2285 | 200 |
+| **`info/routes`** | **27996** | **200** |
+| **`info/store`** | — | **hangs** |
+| `info` (contains `store`) | — | **hangs** |
+
+A 28 KB response transits fine, so response size is irrelevant. Composites are
+fine. Only `store` fails, and `info` fails solely because it embeds `store`.
+
+`store` is the one subtree that is AndEE-specific: it holds the
+`hb_store_andee_gateway_cache` wrapper with a nested `inner-store` and
+`preloaded-store` (`store/2/inner-store*` are keys no upstream node has).
+Locally the same key serialises instantly — `info/store?accept-bundle=true`
+returns a 1146-byte bundle in under half a second.
+
+Two different failure signatures were observed, which is worth noting for
+whoever picks this up:
+
+- `~meta@1.0/info`: the node posts the response and the router replies **HTTP
+  500** (an nginx error page), and `dev_tunnel` retries every
+  `?DEFAULT_RETRY_TIME` (1 s). Tally over one session: 1×202, 21×500.
+- `~meta@1.0/info/store`: the node logs **nothing at all** — no response POST is
+  ever attempted, so the request appears to hang inside the node on the tunnel
+  path before a response is produced.
+
+The router is confirmed healthy: Sam's node on the *same* host
+(`7qgyaigiw2hxydtgt57r7kbvdxl5bjuwkdd3mly5gt5qfzcq34nq.smoke.solutions`)
+returns a 37,292-byte `~meta@1.0/info` multipart bundle in ~7 s.
 
 What the phone's log actually shows for a failing request:
 
@@ -85,29 +122,26 @@ made it look like a size cutoff. Successful small responses get a single 202.
 
 Ruled out by direct test:
 
-- **Not a body-size limit anywhere in the path.** POSTing 1 KB → 2 MB bodies
-  straight at `https://smoke.solutions/~tunnel@1.0/response` returns 403
-  "Tunnel response requires a signature from its address" at *every* size, so
-  nginx forwards multi-megabyte bodies and the application receives them.
-- **Not link materialization on the phone.** `dev_tunnel` calls
-  `hb_cache:ensure_all_loaded/2` before committing a response, and AndEE's store
-  chain ends in an Arweave gateway, so this was the leading hypothesis. The node
-  log shows **zero** gateway or Arweave activity during the failures.
+- **Not a body-size limit anywhere.** POSTing 1 KB - 2 MB bodies straight at
+  `https://smoke.solutions/~tunnel@1.0/response` returns 403 "Tunnel response
+  requires a signature from its address" at *every* size.
+- **Not response size.** `info/routes` returns 27996 bytes through our tunnel.
+- **Not link materialization.** `dev_tunnel` calls `hb_cache:ensure_all_loaded/2`
+  before committing and AndEE's store chain ends in an Arweave gateway, so this
+  was the leading hypothesis; the node log shows zero gateway activity.
 - **Not a stale client device.** The deployed implementation
   `SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0` already contains
-  `verify_committed/2` and `without_transport_commitment`, i.e. it is newer than
-  the 2026-07-18 `fix/tunnel-response-materialization` merge.
+  `verify_committed/2`, i.e. it is newer than the 2026-07-18
+  `fix/tunnel-response-materialization` merge.
+- **Not the alpha's zone hook.** Composite keys including the new `on` subtree
+  (which carries that hook) transit fine.
 
-So the router rejects our larger *signed* response specifically. The 500 is
-served by nginx rather than by HyperBEAM, so the upstream either errored with no
-body or died handling the request. Diagnosing further needs the router's own
-logs.
+Unexplained and worth a look: `~tunnel@1.0/ack` intermittently returns 403, and
+some response POSTs end in `gun_await_process_down ... reason: timeout`.
 
-Also seen during the run, unexplained: `~tunnel@1.0/ack` intermittently returns
-403, and some response POSTs end in `gun_await_process_down … reason: timeout`.
-
-Next step is to repeat against a different tunnel router. Large requests are
-reported to work against other hosts, which would pin this to `smoke.solutions`.
+Next step: instrument the node's tunnel path for `~meta@1.0/info/store`, since
+that request produces no log line at all. A minimal reproducer is a tunneled
+AndEE node and a single GET of `~meta@1.0/info/store`.
 
 ## Stale pin in the tunnel smoke script
 
