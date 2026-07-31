@@ -81,12 +81,28 @@ curl -X POST "$PUB/~zone@1.0/init?name=permawebos&self-url=$PUB&template-measure
 admission runs `~measurement@1.0/verify-peer` against that template, so a peer
 that cannot produce a matching AndEE boot measurement is refused.
 
-Then replace the `zone-allow` placeholder with that same public URL, so the node
-rejoins its own zone on subsequent boots, and hand the same value to joiners:
+### The live zone
 
-```json
-"zone-allow": { "permawebos": "https://<base32-address>.smoke.solutions" }
-```
+Created 2026-07-31 on the Pixel 9 node and reachable through its tunnel:
+
+| | |
+| --- | --- |
+| name | `permawebos` |
+| peer | `https://qd5thgjy7vkcr6pp2hyvqgardhrc426tjjaobbnetv7ctwrdsqda.smoke.solutions` |
+| ring address | `isUcx_QUq_XY-Wdxk66D6FMgoyANEdsgV2na2VDZuTk` |
+| initializer | `gPszmTj9VCj579HxWBgRGeIua9NKQOCFpJ1-KdojlAY` |
+| template | `measurement-device: andee@1.0` |
+
+Both example configs now carry that as their `zone-allow`, so importing either
+one joins this zone. Verified publicly: `~zone@1.0/status?name=permawebos`
+through the tunnel returns `identity: zone/permawebos`, `initialized: true`.
+
+**Caveat on persistence.** The peer URL is derived from the hosting node's
+address, so it only holds while that node keeps its identity. Clearing the app's
+data mints a new address and the zone becomes unreachable at this URL. A
+longer-lived home would be a node with a stable operator, which is why
+`smoke.solutions` was the first choice — it already runs the device tree, but
+creating a zone there needs its operator key.
 
 ### Why not host it on mystical.computer
 

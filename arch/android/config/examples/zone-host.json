@@ -1,11 +1,9 @@
 {
   "andee-profile-source": "permawebos zone host (AndEE-attested)",
-
   "zone-init-allow": true,
   "zone-allow": {
-    "permawebos": "https://REPLACE-WITH-THIS-NODES-PUBLIC-TUNNEL-URL"
+    "permawebos": "https://qd5thgjy7vkcr6pp2hyvqgardhrc426tjjaobbnetv7ctwrdsqda.smoke.solutions"
   },
-
   "on": {
     "start": [
       {
@@ -20,7 +18,6 @@
       }
     ]
   },
-
   "trusted-devices": {
     "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0"
   }

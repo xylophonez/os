@@ -3,11 +3,9 @@
   "lapee-profile": "aopayment-bundler-p4-paid-remote",
   "lapee-allow-request-trusted-ca": true,
   "http-client-prefer-ipv4": true,
-
   "zone-allow": {
-    "REPLACE-ME-zone-name": "https://REPLACE-ME-zone-peer"
+    "permawebos": "https://qd5thgjy7vkcr6pp2hyvqgardhrc426tjjaobbnetv7ctwrdsqda.smoke.solutions"
   },
-
   "on": {
     "start": [
       {
@@ -30,13 +28,11 @@
       }
     ]
   },
-
   "trusted-device-signers": [
     "q5Fcm0NJ34-ss3E1R9dgjGKLLA0B-KYw0J_6U-Pck6o",
     "aYDOU6kEcE3lK7aA-gTmUKHTbLlQnZZXWpv1_i_Uq1U",
     "vZY2XY1RD9HIfWi8ift-1_DnHLDadZMWrufSh-_rKF0"
   ],
-
   "name-resolvers": [
     {
       "ao-payment@1.0": "7eAMYQ9PG8esiP-XIz1UoP78aI1htNgdtHqSbNm94X4",
@@ -55,7 +51,6 @@
     },
     "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8~json@1.0/deserialize&target=data"
   ],
-
   "trusted-devices": {
     "ao-payment@1.0": "EJwu47Q0MK2DMjohTRX4kNYc7QLiXZmKq3s8QLTgTX4",
     "7eAMYQ9PG8esiP-XIz1UoP78aI1htNgdtHqSbNm94X4": "EJwu47Q0MK2DMjohTRX4kNYc7QLiXZmKq3s8QLTgTX4",
@@ -73,7 +68,6 @@
     "SGIOFvYoRKYIj3bC9_3Ggv2n0lNCOoSRrWJyHUrKeKg": "cEwxPCEk3WIYbWmeXOKlYsvLLBUKeB44P5F2y2FftaI",
     "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0"
   },
-
   "bundler-beneficiary": "kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI",
   "bundler-ans104": "https://up.arweave.net:443",
   "bundler-premium": 0,
@@ -90,7 +84,6 @@
   "metering-rates": {
     "beam-reductions": 0
   },
-
   "router-opts": {
     "offered": [
       {
