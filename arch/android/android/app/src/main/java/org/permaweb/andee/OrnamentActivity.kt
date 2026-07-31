@@ -1,7 +1,10 @@
 package org.permaweb.andee
 
+import android.annotation.SuppressLint
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -12,6 +15,8 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
@@ -46,6 +51,7 @@ class OrnamentActivity : Activity() {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
         }
+        maybeRequestNotificationPermission()
         startForegroundService(Intent(this, AndeeService::class.java))
         ornamentView = OrnamentView(
             this,
@@ -61,6 +67,7 @@ class OrnamentActivity : Activity() {
     override fun onResume() {
         super.onResume()
         startForegroundService(Intent(this, AndeeService::class.java))
+        maybeRequestBatteryOptimizationExemption()
         ornamentView.resumePresentation()
         hideSystemBars()
     }
@@ -142,11 +149,44 @@ class OrnamentActivity : Activity() {
         finishAndRemoveTask()
     }
 
+    private fun maybeRequestNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_POST_NOTIFICATIONS,
+            )
+        }
+    }
 
+    @SuppressLint("BatteryLife")
+    private fun maybeRequestBatteryOptimizationExemption() {
+        if (batteryOptimizationPrompted || Build.VERSION.SDK_INT < 23) return
+        val powerManager = getSystemService(PowerManager::class.java) ?: return
+        if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
+
+        batteryOptimizationPrompted = true
+        val packageUri = Uri.parse("package:$packageName")
+        val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+        runCatching {
+            startActivity(requestIntent)
+        }.onFailure { requestError ->
+            Log.w(TAG, "failed to request battery optimization exemption", requestError)
+            runCatching {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }.onFailure { settingsError ->
+                Log.w(TAG, "failed to open battery optimization settings", settingsError)
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "OrnamentActivity"
         private const val REQUEST_BOOT_CONFIG = 7342
+        private const val REQUEST_POST_NOTIFICATIONS = 7343
     }
 }
 

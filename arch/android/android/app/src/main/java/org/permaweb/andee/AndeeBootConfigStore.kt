@@ -19,6 +19,24 @@ object AndeeBootConfigStore {
 
     fun commitPendingForNextBoot(context: Context): Boolean = installPendingIfPresent(context)
 
+    /** The tunnel broker peer from the effective config's `on/start` hooks, if one is configured. */
+    fun tunnelPeer(context: Context, baseConfig: File): String? {
+        val config = effectiveConfigFile(context, baseConfig)
+        val parsed = parseConfigObject(config.readText(Charsets.UTF_8))
+        for (hook in hookList(parsed.optJSONObject("on")?.opt("start"))) {
+            if (isTunnelStartHook(hook)) {
+                val peer = (hook as JSONObject).optString("peer", "")
+                if (peer.isNotEmpty()) return peer
+            }
+        }
+        return null
+    }
+
+    private fun isTunnelStartHook(value: Any?): Boolean =
+        value is JSONObject &&
+            value.optString("device") == "tunnel@1.0" &&
+            value.optString("path") == "connect"
+
     fun effectiveConfigFile(context: Context, baseConfig: File): File {
         require(baseConfig.isFile) { "missing base AndEE config: ${baseConfig.absolutePath}" }
         installPendingIfPresent(context)
