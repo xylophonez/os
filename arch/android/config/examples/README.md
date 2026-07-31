@@ -57,3 +57,42 @@ measured base values, so including them would be misleading. Two consequences:
 `render-index-page` is likewise a no-op in this HyperBEAM and is not carried
 over. To actually stop serving hyperbuddy, set `default-index` — that is the
 key HyperBEAM reads, and it is not reserved, so an operator config may set it.
+
+## `zone-host.json`
+
+Turns this node into the **host** of a `permawebos` zone whose admission is
+gated on AndEE attestation, and exposes it publicly through the tunnel so other
+AndEE nodes can join.
+
+`zone-init-allow: true` permits `~zone@1.0/init`; without it the node refuses to
+create a zone at all. The tunnel `connect` hook is included because the zone is
+only useful if peers can reach it — a zone hosted at `127.0.0.1` can be joined
+by nothing.
+
+Import this config, let the node boot and the tunnel come up, then create the
+zone (the copy action in the notification gives you the public URL):
+
+```sh
+PUB=https://<base32-address>.smoke.solutions
+curl -X POST "$PUB/~zone@1.0/init?name=permawebos&self-url=$PUB&template-measurement-device=andee@1.0"
+```
+
+`template-measurement-device=andee@1.0` is what makes this an AndEE-only zone:
+admission runs `~measurement@1.0/verify-peer` against that template, so a peer
+that cannot produce a matching AndEE boot measurement is refused.
+
+Then replace the `zone-allow` placeholder with that same public URL, so the node
+rejoins its own zone on subsequent boots, and hand the same value to joiners:
+
+```json
+"zone-allow": { "permawebos": "https://<base32-address>.smoke.solutions" }
+```
+
+### Why not host it on mystical.computer
+
+`~zone@1.0` and `~measurement@1.0` live in this repo's `devices/common` and
+`devices/android`, not in upstream HyperBEAM. `mystical.computer` runs stock
+HyperBEAM and returns HTTP 500 for `~zone@1.0/...`, so it cannot host an
+AndEE-attested zone without the whole device tree being deployed there first.
+`smoke.solutions` does have the devices (`~zone@1.0/status` answers 200) but
+creating a zone on it needs that node's operator key.
