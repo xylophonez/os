@@ -34,6 +34,7 @@ import kotlin.math.sin
 
 class OrnamentActivity : Activity() {
     private lateinit var ornamentView: OrnamentView
+    private var batteryOptimizationPrompted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -141,6 +142,8 @@ class OrnamentActivity : Activity() {
         finishAndRemoveTask()
     }
 
+
+
     companion object {
         private const val TAG = "OrnamentActivity"
         private const val REQUEST_BOOT_CONFIG = 7342
@@ -164,37 +167,53 @@ private class OrnamentView(
     private var pollerThread: Thread? = null
     private var animationFramePending = false
     private var startedAt = System.nanoTime()
+    private var logoRevealStartedAt = 0L
+    private var configTouchActive = false
     private var cachedQrUrl = ""
     private var cachedQrRows = QrV2L.rowsFor("http://<node>:8734/")
-    private var phoneRows: List<String> = emptyList()
     private var qrBitmap: Bitmap? = null
     private var qrBitmapStatus: NodeStatus? = null
     private var qrBitmapPending = false
     private val configButtonBounds = RectF()
     private val clipBounds = Rect()
     private val clipBoundsF = RectF()
-    private val phoneDirty = Rect()
+    private val animationDirty = Rect()
+    private val ambientBounds = RectF()
 
     private var layoutWidth = 0
     private var layoutHeight = 0
     private var greeterTextSize = 0f
     private var greeterLineHeight = 0f
+    private var greeterCellWidth = 0f
     private var greeterMargin = 0f
     private var greeterTopMargin = 0f
     private var greeterBottom = 0f
-    private var phoneTextSize = 0f
-    private var phoneLineHeight = 0f
-    private var phoneX = 0f
-    private var phoneTop = 0f
+    private var ambientCodeTextSize = 0f
+    private var ambientSparkleTextSize = 0f
     private val qrDrawBounds = RectF()
+    private var phoneTextSize = 0f
+    private var phoneCellW = 0f
+    private var phoneLineHeight = 0f
+    private var phoneCols = 0
+    private var phoneRows = 0
+    private var phoneOriginX = 0f
+    private var phoneOriginY = 0f
+    private var phoneCenterCol = 0f
+    private var phoneCenterRow = 0f
+    private var phoneScale = 0f
+    private var phoneAspect = 0f
+    private val phonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = mono
+        isSubpixelText = true
+    }
 
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         typeface = mono
         isSubpixelText = true
     }
-    private val phonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+    private val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = mono
         isSubpixelText = true
     }
@@ -205,11 +224,83 @@ private class OrnamentView(
     }
     private val rectPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+    private data class Vec3(val x: Float, val y: Float, val z: Float)
+    private data class Edge(val a: Vec3, val b: Vec3, val accent: Boolean)
+
+    private fun rotateY(v: Vec3, yaw: Float): Vec3 {
+        val ca = cos(yaw)
+        val sa = sin(yaw)
+        return Vec3(v.x * ca + v.z * sa, v.y, -v.x * sa + v.z * ca)
+    }
+
+    // Orthographic tilt projection to grid-cell coordinates. The aspect value
+    // compensates for non-square Android monospace glyph cells.
+    private fun projectToCell(
+        v: Vec3,
+        centerCol: Float,
+        centerRow: Float,
+        scale: Float,
+        aspect: Float,
+        tilt: Float,
+    ): IntArray {
+        val yt = v.y * cos(tilt) - v.z * sin(tilt)
+        val col = (centerCol + v.x * scale).roundToInt()
+        val row = (centerRow - yt * scale * aspect).roundToInt()
+        return intArrayOf(col, row)
+    }
+
+    private fun pickLineChar(dx: Int, dy: Int): Char = when {
+        dy.toLong() * 2 < dx.toLong() -> '-'
+        dx.toLong() * 2 < dy.toLong() -> '|'
+        (dx > 0) == (dy > 0) -> '\\'
+        else -> '/'
+    }
+
+    private fun plotLine(grid: CharArray, cols: Int, rows: Int, x0: Int, y0: Int, x1: Int, y1: Int) {
+        val ch = pickLineChar(abs(x1 - x0), abs(y1 - y0))
+        var x = x0
+        var y = y0
+        val dx = abs(x1 - x0)
+        val dy = -abs(y1 - y0)
+        val sx = if (x0 < x1) 1 else -1
+        val sy = if (y0 < y1) 1 else -1
+        var err = dx + dy
+        while (true) {
+            setCell(grid, cols, rows, x, y, ch)
+            if (x == x1 && y == y1) {
+                setCell(grid, cols, rows, x, y, '+')
+                return
+            }
+            val e2 = 2 * err
+            val nx: Int
+            val ny: Int
+            if (e2 >= dy) {
+                nx = x + sx
+                err += dy
+            } else {
+                nx = x
+            }
+            if (e2 <= dx) {
+                ny = y + sy
+                err += dx
+            } else {
+                ny = y
+            }
+            x = nx
+            y = ny
+        }
+    }
+
+    private fun setCell(grid: CharArray, cols: Int, rows: Int, col: Int, row: Int, ch: Char) {
+        if (col < 0 || col >= cols || row < 0 || row >= rows) return
+        grid[row * cols + col] = ch
+    }
+
     private val animationTick = object : Runnable {
         override fun run() {
             animationFramePending = false
             if (!presentationActive.get()) return
-            if (updatePhoneFrame(force = false)) invalidatePhone()
+            invalidateAmbient()
             scheduleAnimationFrame()
         }
     }
@@ -233,7 +324,8 @@ private class OrnamentView(
 
     fun resumePresentation() {
         startedAt = System.nanoTime()
-        updatePhoneFrame(force = true)
+        logoRevealStartedAt = startedAt
+        configTouchActive = false
         if (presentationActive.compareAndSet(false, true)) startPoller()
         invalidate()
         scheduleAnimationFrame()
@@ -278,8 +370,11 @@ private class OrnamentView(
 
         val status = nodeStatus.get()
         drawBackground(canvas)
+        if (Rect.intersects(clipBounds, animationDirty)) {
+            drawAmbient(canvas)
+            drawPhone(canvas)
+        }
         if (clipBounds.top < greeterBottom) drawGreeter(canvas)
-        if (Rect.intersects(clipBounds, phoneDirty)) drawPhone(canvas)
         if (RectF.intersects(qrDrawBounds, clipBoundsF)) drawQr(canvas, status)
     }
 
@@ -315,17 +410,17 @@ private class OrnamentView(
         postDelayed(animationTick, ANIMATION_FRAME_MS)
     }
 
-    private fun invalidatePhone() {
+    private fun invalidateAmbient() {
         if (width <= 0 || height <= 0) {
             invalidate()
             return
         }
         ensureLayout()
         postInvalidateOnAnimation(
-            phoneDirty.left,
-            phoneDirty.top,
-            phoneDirty.right,
-            phoneDirty.bottom,
+            animationDirty.left,
+            animationDirty.top,
+            animationDirty.right,
+            animationDirty.bottom,
         )
     }
 
@@ -342,82 +437,270 @@ private class OrnamentView(
         var size = (width / 58f).coerceIn(dp(10f), dp(21f))
         textPaint.typeface = mono
         textPaint.textSize = size
-        var maxLine = HYPERBEAM_GREETER.maxOf { textPaint.measureText(it) }
+        var cellWidth = measureLogoCellWidth(size)
+        var maxLine = cellWidth * logoColumnCount()
         val available = width - greeterMargin * 2f
         if (maxLine > available) {
             size *= available / maxLine
             textPaint.textSize = size
+            cellWidth = measureLogoCellWidth(size)
         }
         greeterTextSize = size
         greeterLineHeight = size * 1.08f
+        greeterCellWidth = cellWidth
         greeterBottom = greeterTopMargin + size + HYPERBEAM_GREETER.size * greeterLineHeight + size * 0.55f
-
-        val rows = PHONE_ROWS
-        val cols = PHONE_COLS
-        val availableHeight = height - greeterBottom
-        val sizeByWidth = width / (cols * 0.42f)
-        val sizeByHeight = availableHeight / (rows * 1.08f) * 1.18f
-        phoneTextSize = (min(sizeByWidth, sizeByHeight) * 0.86f).coerceIn(dp(18f), dp(76f))
-        phonePaint.typeface = mono
-        phonePaint.textSize = phoneTextSize
-        val charWidth = phonePaint.measureText("M")
-        phoneLineHeight = phoneTextSize * 1.08f
-        val blockWidth = charWidth * cols
-        phoneX = width * 0.62f - blockWidth * 0.50f
-        phoneTop = greeterBottom + dp(18f)
-        val phonePad = dp(18f)
-        phoneDirty.set(
-            floor(phoneX - phonePad).toInt().coerceAtLeast(0),
-            floor(phoneTop - phonePad).toInt().coerceAtLeast(0),
-            kotlin.math.ceil(phoneX + blockWidth + phonePad).toInt().coerceAtMost(width),
-            kotlin.math.ceil(phoneTop + rows * phoneLineHeight + phonePad).toInt().coerceAtMost(height),
-        )
 
         val moduleCount = cachedQrRows.size
         val target = min(width * 0.34f, height * 0.16f).coerceAtLeast(dp(132f))
         val modulePx = max(3, floor(target / moduleCount).toInt())
         val qrSize = (modulePx * moduleCount).toFloat()
-        val qrX = greeterMargin
         val qrY = height - qrSize - dp(126f)
+
+        ambientCodeTextSize = (width / 36f).coerceIn(dp(12f), dp(24f))
+        ambientSparkleTextSize = (width / 34f).coerceIn(dp(14f), dp(30f))
+        ambientBounds.set(0f, 0f, width.toFloat(), height.toFloat())
+        animationDirty.set(0, 0, width, height)
+        val qrX = greeterMargin
         qrDrawBounds.set(0f, qrY - dp(28f), width.toFloat(), qrY + qrSize + dp(74f))
+
+        val phoneTop = greeterBottom + dp(8f)
+        val phoneBottom = (qrDrawBounds.top - dp(20f)).coerceAtLeast(phoneTop + dp(80f))
+        val phoneAreaH = phoneBottom - phoneTop
+        phoneTextSize = (width / 44f).coerceIn(dp(9f), dp(17f))
+        phonePaint.typeface = mono
+        phonePaint.textSize = phoneTextSize
+        phoneCellW = phonePaint.measureText("M").coerceAtLeast(1f)
+        phoneLineHeight = phoneTextSize
+        phoneCols = ((width - greeterMargin * 2f) / phoneCellW).toInt().coerceAtLeast(20)
+        phoneRows = (phoneAreaH / phoneLineHeight).toInt().coerceAtLeast(12)
+        phoneOriginX = greeterMargin
+        phoneOriginY = phoneTop
+        phoneCenterCol = (width / 2f - phoneOriginX) / phoneCellW
+        phoneCenterRow = (phoneAreaH / 2f) / phoneLineHeight
+        phoneScale = min(
+            phoneCols * 1.35f / (2f * PHONE_HALF_WIDTH),
+            phoneRows * 1.20f / (2f * PHONE_HALF_HEIGHT),
+        )
+        phoneAspect = phoneCellW / phoneLineHeight
     }
 
     private fun drawGreeter(canvas: Canvas) {
-        var y = greeterTopMargin + greeterTextSize
-
-        textPaint.color = Color.WHITE
-        textPaint.clearShadowLayer()
         textPaint.typeface = mono
         textPaint.textSize = greeterTextSize
-        for (line in HYPERBEAM_GREETER) {
-            canvas.drawText(line, greeterMargin, y, textPaint)
-            y += greeterLineHeight
-        }
+        textPaint.clearShadowLayer()
+        drawExactLogo(canvas, 1f)
+    }
+
+    private fun drawAmbient(canvas: Canvas) {
+        val elapsed = elapsedSeconds()
+        val frame = floor(elapsed * BEAM_FPS).toInt()
+        val progress = logoRevealProgress()
+        drawLogoPassingWords(canvas, ambientBounds, elapsed, frame)
+        drawAmbientFuzz(canvas, ambientBounds, elapsed, frame, progress)
     }
 
     private fun drawPhone(canvas: Canvas) {
-        if (phoneRows.isEmpty()) updatePhoneFrame(force = true)
-        phonePaint.typeface = mono
-        phonePaint.textSize = phoneTextSize
-        phonePaint.color = Color.WHITE
-        phonePaint.setShadowLayer(dp(11f), 0f, 0f, Color.rgb(85, 229, 255))
-
-        for ((index, text) in phoneRows.withIndex()) {
-            canvas.drawText(text, phoneX, phoneTop + (index + 1) * phoneLineHeight, phonePaint)
+        if (phoneCols <= 0 || phoneRows <= 0) return
+        val fade = (elapsedSeconds() / PHONE_FADE_SECONDS).coerceIn(0f, 1f)
+        val yaw = elapsedSeconds() * PHONE_YAW_RATE
+        val cols = phoneCols
+        val rows = phoneRows
+        val grid = CharArray(cols * rows) { ' ' }
+        for (edge in PHONE_EDGES) {
+            val a = projectToCell(
+                rotateY(edge.a, yaw),
+                phoneCenterCol,
+                phoneCenterRow,
+                phoneScale,
+                phoneAspect,
+                PHONE_TILT,
+            )
+            val b = projectToCell(
+                rotateY(edge.b, yaw),
+                phoneCenterCol,
+                phoneCenterRow,
+                phoneScale,
+                phoneAspect,
+                PHONE_TILT,
+            )
+            plotLine(grid, cols, rows, a[0], a[1], b[0], b[1])
         }
-        phonePaint.clearShadowLayer()
+
+        phonePaint.typeface = mono
+        phonePaint.isFakeBoldText = false
+        phonePaint.textSize = phoneTextSize
+        val fm = phonePaint.fontMetrics
+        val baseline = phoneOriginY - fm.ascent
+        phonePaint.color = withAlpha(Color.WHITE, fade)
+        drawPhoneGrid(canvas, grid, cols, rows, baseline, phonePaint)
+
+        val accentGrid = CharArray(cols * rows) { ' ' }
+        for (edge in PHONE_EDGES) {
+            if (!edge.accent) continue
+            val a = projectToCell(
+                rotateY(edge.a, yaw),
+                phoneCenterCol,
+                phoneCenterRow,
+                phoneScale,
+                phoneAspect,
+                PHONE_TILT,
+            )
+            val b = projectToCell(
+                rotateY(edge.b, yaw),
+                phoneCenterCol,
+                phoneCenterRow,
+                phoneScale,
+                phoneAspect,
+                PHONE_TILT,
+            )
+            plotLine(accentGrid, cols, rows, a[0], a[1], b[0], b[1])
+        }
+
+        accentPaint.typeface = mono
+        accentPaint.isFakeBoldText = false
+        accentPaint.textSize = phoneTextSize
+        accentPaint.color = withAlpha(Color.rgb(91, 238, 255), fade)
+        drawPhoneGrid(canvas, accentGrid, cols, rows, baseline, accentPaint)
     }
 
-    private fun updatePhoneFrame(force: Boolean): Boolean {
-        val elapsed = ((System.nanoTime() - startedAt) / 1_000_000_000.0).toFloat()
-        val nextRows = renderPhoneRows(elapsed)
-        if (!force && nextRows == phoneRows) return false
-        phoneRows = nextRows
-        return true
+    private fun drawPhoneGrid(canvas: Canvas, grid: CharArray, cols: Int, rows: Int, baseline: Float, paint: Paint) {
+        for (row in 0 until rows) {
+            val rowBase = baseline + row * phoneLineHeight
+            for (col in 0 until cols) {
+                val ch = grid[row * cols + col]
+                if (ch == ' ') continue
+                canvas.drawText(ch.toString(), phoneOriginX + col * phoneCellW, rowBase, paint)
+            }
+        }
     }
 
-    private fun renderPhoneRows(elapsed: Float): List<String> =
-        renderPhoneGrid(elapsed).map { String(it) }
+    private fun elapsedSeconds(): Float =
+        ((System.nanoTime() - startedAt) / 1_000_000_000.0).toFloat()
+
+
+
+    private fun drawExactLogo(canvas: Canvas, alpha: Float) {
+        textPaint.typeface = mono
+        textPaint.textSize = greeterTextSize
+        textPaint.color = withAlpha(Color.WHITE, alpha)
+        textPaint.clearShadowLayer()
+        val charWidth = logoCharWidth()
+        for (row in HYPERBEAM_GREETER.indices) {
+            val y = greeterTopMargin + greeterTextSize + row * greeterLineHeight
+            val line = HYPERBEAM_GREETER[row]
+            for (col in line.indices) {
+                val ch = line[col]
+                if (ch == ' ') continue
+                canvas.drawText(ch.toString(), greeterMargin + col * charWidth, y, textPaint)
+            }
+        }
+    }
+
+    private fun drawAmbientFuzz(canvas: Canvas, area: RectF, elapsed: Float, frame: Int, progress: Float) {
+        val top = greeterBottom + dp(10f)
+        val bottom = (qrDrawBounds.top - dp(28f)).coerceAtLeast(top + dp(80f))
+
+        codePaint.typeface = mono
+        codePaint.isFakeBoldText = true
+        for (i in 0 until BEAM_PARTICLE_COUNT) {
+            val speed = 0.020f + hashUnit(i, 0, 0, 71) * 0.082f
+            val orbit = elapsed * speed + hashUnit(i, 0, 0, 72) * 6.28318f
+            val x = area.left + area.width() * hashUnit(i, 0, 0, 73) +
+                sin(orbit + i) * area.width() * (0.012f + hashUnit(i, 0, 0, 74) * 0.026f)
+            val y = top + (bottom - top) * hashUnit(i, 0, 0, 75) +
+                sin(orbit * (1.4f + hashUnit(i, 0, 0, 76)) + i) * dp(18f)
+            val ch = LOGO_FUZZ_CHARS[(hashUnit(i, frame, 0, 77) * LOGO_FUZZ_CHARS.size)
+                .toInt()
+                .coerceIn(0, LOGO_FUZZ_CHARS.lastIndex)]
+            val alpha = (0.035f + hashUnit(i, frame, 0, 78) * 0.10f) * (1f - progress * 0.36f)
+            codePaint.textSize = (ambientSparkleTextSize * (0.36f + hashUnit(i, 0, 0, 79) * 0.26f))
+                .coerceIn(dp(6f), dp(14f))
+            codePaint.color = withAlpha(BEAM_COLORS[(i + frame / 4) % BEAM_COLORS.size], alpha)
+            canvas.drawText(ch.toString(), x, y, codePaint)
+        }
+        codePaint.isFakeBoldText = false
+    }
+
+    private fun drawLogoPassingWords(canvas: Canvas, area: RectF, elapsed: Float, frame: Int) {
+        val previousSize = codePaint.textSize
+        val previousBold = codePaint.isFakeBoldText
+        codePaint.textSize = (ambientCodeTextSize * 0.58f).coerceIn(dp(8f), dp(13f))
+        codePaint.isFakeBoldText = true
+
+        val verticalTop = greeterBottom + dp(22f)
+        val verticalBottom = (qrDrawBounds.top - dp(48f)).coerceAtLeast(verticalTop + dp(120f))
+        val travelWidth = area.width() + dp(210f)
+        for (i in BEAM_WORDS.indices) {
+            val word = BEAM_WORDS[i]
+            val speed = BEAM_WORD_SPEEDS[i % BEAM_WORD_SPEEDS.size]
+            val phase = fract(elapsed * speed + i * 0.231f)
+            val wordWidth = codePaint.measureText(word)
+            val x = if (i % 2 == 0) {
+                area.right + dp(64f) - phase * (travelWidth + wordWidth)
+            } else {
+                area.left - wordWidth - dp(64f) + phase * (travelWidth + wordWidth)
+            }
+            val yBand = fract(i * 0.41421356f + 0.16f)
+            val y = verticalTop + (verticalBottom - verticalTop) * yBand +
+                sin(elapsed * (0.11f + i * 0.013f) + i) * dp(7f)
+            val alpha = (burstAlpha(phase) * 0.10f).coerceIn(0.01f, 0.10f)
+            codePaint.color = withAlpha(BEAM_COLORS[(i + frame / 5) % BEAM_COLORS.size], alpha)
+            canvas.drawText(word, x, y, codePaint)
+        }
+
+        codePaint.textSize = previousSize
+        codePaint.isFakeBoldText = previousBold
+    }
+
+
+
+    private fun logoRevealProgress(): Float {
+        val start = logoRevealStartedAt
+        if (start == 0L) return 0f
+        val seconds = ((System.nanoTime() - start) / 1_000_000_000.0).toFloat()
+        return easeInOut((seconds / LOGO_REVEAL_SECONDS).coerceIn(0f, 1f))
+    }
+
+    private fun logoCharWidth(): Float {
+        if (greeterCellWidth > 0f) return greeterCellWidth
+        textPaint.typeface = mono
+        textPaint.textSize = greeterTextSize
+        return textPaint.measureText("M").coerceAtLeast(1f)
+    }
+
+    private fun logoWidth(): Float {
+        return logoCharWidth() * logoColumnCount()
+    }
+
+    private fun logoColumnCount(): Int =
+        HYPERBEAM_GREETER.maxOf { it.length }
+
+    private fun measureLogoCellWidth(size: Float): Float {
+        textPaint.typeface = mono
+        textPaint.textSize = size
+        var width = textPaint.measureText("M")
+        for (line in HYPERBEAM_GREETER) {
+            for (ch in line) {
+                if (ch != ' ') width = max(width, textPaint.measureText(ch.toString()))
+            }
+        }
+        return width.coerceAtLeast(1f)
+    }
+
+    private fun beamColor(row: Int, col: Int, frame: Int): Int {
+        val band = Math.floorMod((row * 3.2f + col * 1.45f + frame * 0.18f).toInt(), BEAM_COLORS.size)
+        return BEAM_COLORS[band]
+    }
+
+    private fun easeInOut(value: Float): Float {
+        val t = value.coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
+
+    private fun hashUnit(a: Int, b: Int, c: Int, salt: Int): Float {
+        val value = sin(a * 12.9898f + b * 78.233f + c * 37.719f + salt * 19.19f) * 43758.5453f
+        return fract(value)
+    }
 
     private fun drawQr(canvas: Canvas, status: NodeStatus) {
         val bitmap = cachedQrBitmap(status)
@@ -498,7 +781,8 @@ private class OrnamentView(
         accentPaint.typeface = mono
         accentPaint.textSize = (width / 42f).coerceIn(dp(10f), dp(18f))
         accentPaint.color = Color.WHITE
-        val labelY = qrY + accentPaint.textSize
+        val controlY = height - dp(108f)
+        val labelY = controlY + accentPaint.textSize
         val labelText = "NODE URL"
 
         textPaint.typeface = mono
@@ -530,19 +814,34 @@ private class OrnamentView(
             canvas.drawText(line, labelX, textY, textPaint)
             textY += textPaint.textSize * 1.35f
         }
-        drawConfigButton(canvas, qrX, qrY + qrSize + dp(18f), qrSize)
+        drawConfigButton(canvas, qrX, controlY, qrSize)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val inside = configButtonBounds.contains(event.x, event.y)
-        if (event.action == MotionEvent.ACTION_DOWN && inside) return true
-        if (event.action == MotionEvent.ACTION_UP && inside) {
-            if (nextBootConfigPending.get()) {
-                actions.terminate()
-            } else {
-                actions.pickNextBootConfig()
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                configTouchActive = inside
+                return true
             }
-            return true
+            MotionEvent.ACTION_UP -> {
+                if (configTouchActive) {
+                    configTouchActive = false
+                    if (inside) {
+                        if (nextBootConfigPending.get()) {
+                            actions.terminate()
+                        } else {
+                            actions.pickNextBootConfig()
+                        }
+                    }
+                    return true
+                }
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                configTouchActive = false
+                return true
+            }
         }
         return super.onTouchEvent(event)
     }
@@ -561,7 +860,7 @@ private class OrnamentView(
         textPaint.textSize = (width / 18.2f).coerceIn(dp(10f), dp(16f))
         textPaint.color = if (terminate) Color.WHITE else BACKGROUND
         textPaint.clearShadowLayer()
-        val label = if (terminate) "TERMINATE" else "SET NEXT BOOT CONFIG"
+        val label = if (terminate) "RESTART TO APPLY" else "LOAD CONFIG"
         val textWidth = textPaint.measureText(label)
         val metrics = textPaint.fontMetrics
         val textX = x + (width - textWidth) / 2f
@@ -569,128 +868,23 @@ private class OrnamentView(
         canvas.drawText(label, textX, textY, textPaint)
     }
 
-    private fun renderPhoneGrid(elapsed: Float): Array<CharArray> {
-        val cols = PHONE_COLS
-        val rows = PHONE_ROWS
-        val grid = Array(rows) { CharArray(cols) { ' ' } }
-        val yaw = elapsed * 0.82f
-        val pitch = -0.10f + sin(elapsed * 0.37f) * 0.05f
-        val scale = 8.15f
-        val cx = cols / 2f
-        val cy = rows / 2f + 1.35f
+    private fun burstAlpha(phase: Float): Float =
+        when {
+            phase < 0.18f -> phase / 0.18f
+            phase > 0.82f -> (1f - phase) / 0.18f
+            else -> 1f
+        }.coerceIn(0.18f, 1f)
 
-        for ((from, to) in phoneEdges()) {
-            val p1 = project(from, yaw, pitch, scale, cx, cy)
-            val p2 = project(to, yaw, pitch, scale, cx, cy)
-            drawAsciiLine(grid, p1.first, p1.second, p2.first, p2.second)
-        }
+    private fun fract(value: Float): Float =
+        value - floor(value)
 
-        return grid
-    }
-
-    private fun project(
-        point: Vec3,
-        yaw: Float,
-        pitch: Float,
-        scale: Float,
-        cx: Float,
-        cy: Float,
-    ): Pair<Int, Int> {
-        val cyaw = cos(yaw)
-        val syaw = sin(yaw)
-        val x1 = point.x * cyaw + point.z * syaw
-        val z1 = -point.x * syaw + point.z * cyaw
-
-        val cp = cos(pitch)
-        val sp = sin(pitch)
-        val y2 = point.y * cp - z1 * sp
-        val z2 = point.y * sp + z1 * cp
-
-        val tilt = 0.48f
-        val yView = y2 * cos(tilt) - z2 * sin(tilt)
-        val perspective = 1.0f / (1.0f + (z2 + 3.8f) * 0.035f)
-        val col = (cx + x1 * scale * perspective).roundToInt()
-        val row = (cy - yView * scale * 0.58f * perspective).roundToInt()
-        return col to row
-    }
-
-    private fun drawAsciiLine(grid: Array<CharArray>, x0: Int, y0: Int, x1: Int, y1: Int) {
-        val dxAbs = abs(x1 - x0)
-        val dyAbs = abs(y1 - y0)
-        val ch = when {
-            dyAbs * 2 < dxAbs -> '-'
-            dxAbs * 2 < dyAbs -> '|'
-            (x1 - x0) * (y1 - y0) > 0 -> '\\'
-            else -> '/'
-        }
-
-        var x = x0
-        var y = y0
-        val sx = if (x0 < x1) 1 else -1
-        val sy = if (y0 < y1) 1 else -1
-        var err = dxAbs - dyAbs
-        while (true) {
-            plot(grid, x, y, ch)
-            if (x == x1 && y == y1) break
-            val e2 = err * 2
-            if (e2 > -dyAbs) {
-                err -= dyAbs
-                x += sx
-            }
-            if (e2 < dxAbs) {
-                err += dxAbs
-                y += sy
-            }
-        }
-        plot(grid, x0, y0, '+')
-        plot(grid, x1, y1, '+')
-    }
-
-    private fun plot(grid: Array<CharArray>, x: Int, y: Int, ch: Char) {
-        if (y in grid.indices && x in grid[y].indices) {
-            grid[y][x] = ch
-        }
-    }
-
-    private fun phoneEdges(): List<Pair<Vec3, Vec3>> {
-        val xl = -1.62f
-        val xr = 1.62f
-        val yt = 3.75f
-        val yb = -3.75f
-        val zf = 0.22f
-        val zb = -0.22f
-        val front = listOf(
-            Vec3(xl, yt, zf),
-            Vec3(xr, yt, zf),
-            Vec3(xr, yb, zf),
-            Vec3(xl, yb, zf),
+    private fun withAlpha(color: Int, alpha: Float): Int =
+        Color.argb(
+            (alpha.coerceIn(0f, 1f) * 255f).roundToInt(),
+            Color.red(color),
+            Color.green(color),
+            Color.blue(color),
         )
-        val back = listOf(
-            Vec3(xl, yt, zb),
-            Vec3(xr, yt, zb),
-            Vec3(xr, yb, zb),
-            Vec3(xl, yb, zb),
-        )
-        val screen = listOf(
-            Vec3(-1.16f, 2.82f, zf + 0.03f),
-            Vec3(1.16f, 2.82f, zf + 0.03f),
-            Vec3(1.16f, -2.52f, zf + 0.03f),
-            Vec3(-1.16f, -2.52f, zf + 0.03f),
-        )
-        return buildList {
-            addLoop(front)
-            addLoop(back)
-            for (i in front.indices) add(front[i] to back[i])
-            addLoop(screen)
-            add(Vec3(-0.36f, 3.18f, zf + 0.04f) to Vec3(0.36f, 3.18f, zf + 0.04f))
-            add(Vec3(-0.24f, -3.10f, zf + 0.04f) to Vec3(0.24f, -3.10f, zf + 0.04f))
-            add(Vec3(0.52f, 3.20f, zf + 0.04f) to Vec3(0.58f, 3.20f, zf + 0.04f))
-        }
-    }
-
-    private fun MutableList<Pair<Vec3, Vec3>>.addLoop(points: List<Vec3>) {
-        for (i in points.indices) add(points[i] to points[(i + 1) % points.size])
-    }
 
     private fun fitToWidth(text: String, paint: Paint, maxWidth: Float): String {
         if (paint.measureText(text) <= maxWidth) return text
@@ -709,13 +903,38 @@ private class OrnamentView(
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
 
     companion object {
-        private val BACKGROUND = Color.rgb(3, 14, 46)
+        private val BACKGROUND = Color.rgb(21, 18, 58)
         private val TERMINATE_ORANGE = Color.rgb(164, 76, 0)
         private const val ANIMATION_FRAME_MS = 100L
         private const val BOOT_POLL_MS = 1_000L
         private const val STEADY_POLL_MS = 5_000L
-        private const val PHONE_COLS = 36
-        private const val PHONE_ROWS = 29
+        private const val BEAM_FPS = 12f
+        private const val LOGO_REVEAL_SECONDS = 1.85f
+        private const val BEAM_PARTICLE_COUNT = 22
+        private val BEAM_COLORS = intArrayOf(
+            Color.rgb(79, 255, 90),
+            Color.rgb(255, 230, 94),
+            Color.rgb(118, 221, 255),
+            Color.rgb(185, 92, 255),
+            Color.rgb(255, 72, 67),
+            Color.rgb(38, 170, 255),
+        )
+        private val LOGO_FUZZ_CHARS = charArrayOf('.', ':', '*', '+', '~', ';', '=')
+        private val TAP_CLUSTER_TOKENS = arrayOf(".", ":", "*", "+", "~", "::", "[]", "{}", "ao", "p4", "hb")
+        private val BEAM_WORDS = arrayOf(
+            "~arweave@2.9",
+            "~bundle@1.0",
+            "~json@1.0",
+            "~meta@1.0",
+            "~p4@1.0",
+            "~ao@1.0",
+        )
+        private val BEAM_WORD_SPEEDS = floatArrayOf(
+            0.010f,
+            0.014f,
+            0.021f,
+            0.032f,
+        )
         private val HYPERBEAM_GREETER = listOf(
             "\u2588\u2588\u2557  \u2588\u2588\u2557\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2557",
             "\u2588\u2588\u2551  \u2588\u2588\u2551\u255a\u2588\u2588\u2557 \u2588\u2588\u2554\u255d\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557",
@@ -730,10 +949,59 @@ private class OrnamentView(
             "\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2551 \u255a\u2550\u255d \u2588\u2588\u2551 BUILD THE",
             "\u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u255d  \u255a\u2550\u255d\u255a\u2550\u255d     \u255a\u2550\u255d FUTURE.",
         )
+        private const val PHONE_HALF_WIDTH = 1.0f
+        private const val PHONE_HALF_HEIGHT = 2.0f
+        private const val PHONE_HALF_DEPTH = 0.16f
+        private const val PHONE_TILT = 0.38f
+        private const val PHONE_YAW_RATE = 1.2f
+        private const val PHONE_FADE_SECONDS = 0.6f
+        private val PHONE_EDGES = run {
+            val fbl = Vec3(-PHONE_HALF_WIDTH, -PHONE_HALF_HEIGHT, PHONE_HALF_DEPTH)
+            val fbr = Vec3(PHONE_HALF_WIDTH, -PHONE_HALF_HEIGHT, PHONE_HALF_DEPTH)
+            val ftl = Vec3(-PHONE_HALF_WIDTH, PHONE_HALF_HEIGHT, PHONE_HALF_DEPTH)
+            val ftr = Vec3(PHONE_HALF_WIDTH, PHONE_HALF_HEIGHT, PHONE_HALF_DEPTH)
+            val bbl = Vec3(-PHONE_HALF_WIDTH, -PHONE_HALF_HEIGHT, -PHONE_HALF_DEPTH)
+            val bbr = Vec3(PHONE_HALF_WIDTH, -PHONE_HALF_HEIGHT, -PHONE_HALF_DEPTH)
+            val btl = Vec3(-PHONE_HALF_WIDTH, PHONE_HALF_HEIGHT, -PHONE_HALF_DEPTH)
+            val btr = Vec3(PHONE_HALF_WIDTH, PHONE_HALF_HEIGHT, -PHONE_HALF_DEPTH)
+            val sbl = Vec3(-0.84f, -1.84f, PHONE_HALF_DEPTH)
+            val sbr = Vec3(0.84f, -1.84f, PHONE_HALF_DEPTH)
+            val stl = Vec3(-0.84f, 1.70f, PHONE_HALF_DEPTH)
+            val str = Vec3(0.84f, 1.70f, PHONE_HALF_DEPTH)
+            val c0 = Vec3(-0.62f, 1.30f, -PHONE_HALF_DEPTH)
+            val c1 = Vec3(-0.18f, 1.30f, -PHONE_HALF_DEPTH)
+            val c2 = Vec3(-0.62f, 1.66f, -PHONE_HALF_DEPTH)
+            val c3 = Vec3(-0.18f, 1.66f, -PHONE_HALF_DEPTH)
+            listOf(
+                Edge(fbl, fbr, false),
+                Edge(ftl, ftr, false),
+                Edge(fbl, ftl, false),
+                Edge(fbr, ftr, false),
+                Edge(bbl, bbr, false),
+                Edge(btl, btr, false),
+                Edge(bbl, btl, false),
+                Edge(bbr, btr, false),
+                Edge(fbl, bbl, false),
+                Edge(fbr, bbr, false),
+                Edge(ftl, btl, false),
+                Edge(ftr, btr, false),
+                Edge(sbl, sbr, true),
+                Edge(stl, str, true),
+                Edge(sbl, stl, true),
+                Edge(sbr, str, true),
+                Edge(
+                    Vec3(-0.22f, 1.88f, PHONE_HALF_DEPTH),
+                    Vec3(0.22f, 1.88f, PHONE_HALF_DEPTH),
+                    true,
+                ),
+                Edge(c0, c1, false),
+                Edge(c2, c3, false),
+                Edge(c0, c2, false),
+                Edge(c1, c3, false),
+            )
+        }
     }
 }
-
-private data class Vec3(val x: Float, val y: Float, val z: Float)
 
 private data class NodeStatus(
     val ready: Boolean,
