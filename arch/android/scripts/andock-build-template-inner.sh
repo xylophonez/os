@@ -86,8 +86,17 @@ rm -f \
 
 # Copy while still root on Linux so numeric owners, hardlinks, and Linux xattrs
 # never cross a macOS filesystem boundary.
+#
+# `--one-file-system` keeps tar from archiving anything under the live kernel
+# filesystems, but tar still reads the mount points' own directory entries and
+# can observe one change mid-read. That is reported as the non-fatal "file
+# changed as we read it" and exit 1, which `pipefail` would otherwise turn into
+# a build failure. Tolerate exactly that from the reading tar: exit 2 is tar's
+# fatal status and still fails, as does any failure of the extracting tar.
+set +e
 tar \
     --create --file=- --one-file-system --numeric-owner --sort=name \
+    --warning=no-file-changed \
     --acls --xattrs --xattrs-include='*' \
     --exclude='./build' --exclude='./output' \
     --exclude='./dev/*' --exclude='./proc/*' --exclude='./run/*' \
@@ -95,6 +104,13 @@ tar \
     --directory=/ . | tar \
         --extract --file=- --numeric-owner --same-owner --same-permissions \
         --acls --xattrs --xattrs-include='*' --directory="$ROOTFS"
+ANDOCK_TAR_STATUS=("${PIPESTATUS[@]}")
+set -e
+if [ "${ANDOCK_TAR_STATUS[1]}" -ne 0 ] || [ "${ANDOCK_TAR_STATUS[0]}" -gt 1 ]; then
+    echo "rootfs copy failed:" \
+        "read=${ANDOCK_TAR_STATUS[0]} write=${ANDOCK_TAR_STATUS[1]}" >&2
+    exit 1
+fi
 
 mkdir -p \
     "$ROOTFS/dev/pts" "$ROOTFS/dev/shm" "$ROOTFS/proc" "$ROOTFS/root" \
