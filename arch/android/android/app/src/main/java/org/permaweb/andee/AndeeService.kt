@@ -18,6 +18,7 @@ import android.util.Base64
 import android.util.Log
 import java.io.File
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HttpsURLConnection
 
 class AndeeService : Service() {
@@ -25,12 +26,19 @@ class AndeeService : Service() {
     private var hyperbeamRuntime: HyperbeamRuntime? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var starterThread: Thread? = null
+    private var statusThread: Thread? = null
+    private val statusRunning = AtomicBoolean(false)
     @Volatile private var stopping = false
+
+    /** The public tunnel URL, set only once it has been observed answering correctly. */
+    @Volatile private var readyPublicUrl: String? = null
+    @Volatile private var statusText = STATUS_STARTING
 
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, notification(), foregroundType())
         acquireRuntimeWakeLock()
+        startStatusPoller()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -61,6 +69,7 @@ class AndeeService : Service() {
         stopping = false
         acquireRuntimeWakeLock()
         startRuntimeIfNeeded()
+        startStatusPoller()
         return START_STICKY
     }
 
@@ -141,6 +150,7 @@ class AndeeService : Service() {
 
     @Synchronized
     private fun stopRuntime() {
+        stopStatusPoller()
         hyperbeamRuntime?.close()
         hyperbeamRuntime = null
         cryptoAgent?.close()
@@ -180,25 +190,26 @@ class AndeeService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Copy the public URL. The action is only ever shown once the poller has confirmed the
+     * URL answers, so this copies the already-verified value rather than re-deriving it.
+     */
     private fun copyPublicUrlAsync() {
+        val publicUrl = readyPublicUrl ?: run {
+            // The action should not have been visible; re-assert the real state instead.
+            Log.w(TAG, "copy requested with no verified public URL")
+            postNotification(statusText, offerCopy = false)
+            return
+        }
         Thread {
             try {
-                val address = runtimeAddress()
-                require(address.length == 43) { "unexpected AndEE address" }
-                val domain = tunnelDomain()
-                    ?: throw IllegalStateException("no tunnel broker configured")
-                val publicBaseUrl = "https://${base32Address(address)}.$domain/"
-                require(publicAddress(publicBaseUrl) == address) { "public tunnel is not healthy" }
-                val publicUrl = "${publicBaseUrl}~hyperbuddy@1.0/index"
                 val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 clipboard.setPrimaryClip(ClipData.newPlainText("AndEE public URL", publicUrl))
-                getSystemService(NotificationManager::class.java)
-                    .notify(NOTIFICATION_ID, notification("Public URL copied"))
+                postNotification("Public URL copied")
                 Log.i(TAG, "public URL copied to clipboard")
             } catch (exc: Exception) {
                 Log.e(TAG, "failed to copy public URL", exc)
-                getSystemService(NotificationManager::class.java)
-                    .notify(NOTIFICATION_ID, notification("Public URL unavailable"))
+                postNotification(statusText)
             }
         }.start()
     }
@@ -261,7 +272,14 @@ class AndeeService : Service() {
         return output.toString()
     }
 
-    private fun notification(text: String = "Runtime active"): Notification {
+    /**
+     * The ongoing notification. The copy action is offered only when a public URL has
+     * actually been observed answering, so a tap can never report a failure.
+     */
+    private fun notification(
+        text: String = statusText,
+        offerCopy: Boolean = readyPublicUrl != null,
+    ): Notification {
         if (Build.VERSION.SDK_INT >= 26) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
@@ -270,19 +288,80 @@ class AndeeService : Service() {
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-        val copyIntent = PendingIntent.getService(
-            this,
-            0,
-            Intent(this, AndeeService::class.java).setAction(ACTION_COPY_PUBLIC_URL),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_andee)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(text)
-            .addAction(Notification.Action.Builder(0, "Copy public URL", copyIntent).build())
             .setOngoing(true)
-            .build()
+        if (offerCopy) {
+            val copyIntent = PendingIntent.getService(
+                this,
+                0,
+                Intent(this, AndeeService::class.java).setAction(ACTION_COPY_PUBLIC_URL),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.addAction(
+                Notification.Action.Builder(0, "Copy public URL", copyIntent).build(),
+            )
+        }
+        return builder.build()
+    }
+
+    private fun postNotification(text: String, offerCopy: Boolean = readyPublicUrl != null) {
+        statusText = text
+        runCatching {
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTIFICATION_ID, notification(text, offerCopy))
+        }.onFailure { Log.w(TAG, "could not update notification", it) }
+    }
+
+    /**
+     * Track what the node is actually doing and reflect it in the notification: booting,
+     * running without a tunnel, connecting, or reachable. Only the last state exposes the
+     * copy action.
+     */
+    private fun startStatusPoller() {
+        if (!statusRunning.compareAndSet(false, true)) return
+        statusThread = Thread {
+            var lastText: String? = null
+            var lastOffer: Boolean? = null
+            while (statusRunning.get() && !stopping) {
+                val (text, url) = currentStatus()
+                readyPublicUrl = url
+                val offer = url != null
+                if (text != lastText || offer != lastOffer) {
+                    lastText = text
+                    lastOffer = offer
+                    postNotification(text, offer)
+                }
+                try {
+                    Thread.sleep(if (offer) STATUS_READY_POLL_MS else STATUS_BOOT_POLL_MS)
+                } catch (_: InterruptedException) {
+                    return@Thread
+                }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+
+    private fun stopStatusPoller() {
+        statusRunning.set(false)
+        statusThread?.interrupt()
+        statusThread = null
+        readyPublicUrl = null
+    }
+
+    /** Current status line, plus the public URL when one is confirmed reachable. */
+    private fun currentStatus(): Pair<String, String?> {
+        val address = runCatching { runtimeAddress() }.getOrNull()
+        if (address == null || address.length != 43) return STATUS_STARTING to null
+        val domain = tunnelDomain() ?: return STATUS_LOCAL_ONLY to null
+        val base = "https://${base32Address(address)}.$domain/"
+        val reachable = runCatching { publicAddress(base) == address }.getOrDefault(false)
+        return if (reachable) {
+            STATUS_REACHABLE to "${base}~hyperbuddy@1.0/index"
+        } else {
+            STATUS_CONNECTING to null
+        }
     }
 
     private fun foregroundType(): Int {
@@ -302,6 +381,12 @@ class AndeeService : Service() {
         private const val TAG = "AndeeService"
         private const val CHANNEL_ID = "andee-runtime"
         private const val NOTIFICATION_ID = 7341
+        private const val STATUS_STARTING = "Starting AndEE…"
+        private const val STATUS_LOCAL_ONLY = "Node running (no tunnel configured)"
+        private const val STATUS_CONNECTING = "Connecting tunnel…"
+        private const val STATUS_REACHABLE = "Node reachable"
+        private const val STATUS_BOOT_POLL_MS = 5_000L
+        private const val STATUS_READY_POLL_MS = 60_000L
         private val NODE_STARTED_PATTERN =
             Regex("AndEE HyperBEAM node started on port \\d+ as ([A-Za-z0-9_-]{43})")
     }
