@@ -528,8 +528,11 @@ for abi in arm64-v8a x86_64; do
             | while IFS= read -r ebin_file; do
                 cp "$ebin_file" "$APP_LIB/$name/ebin/"
             done
+        # `-L`: rebar3 links an app's `priv` to the project's, so without
+        # following symlinks this finds nothing and every priv asset is silently
+        # dropped from the runtime.
         if [ -d "$app/priv" ]; then
-            find "$app/priv" -type f \
+            find -L "$app/priv" -type f \
                 ! -path '*/crates/*' \
                 ! -name '*.a' \
                 ! -name '*.d' \

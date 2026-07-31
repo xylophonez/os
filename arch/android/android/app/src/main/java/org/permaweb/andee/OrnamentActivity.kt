@@ -3,6 +3,7 @@ package org.permaweb.andee
 import android.annotation.SuppressLint
 import android.Manifest
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -163,12 +164,32 @@ class OrnamentActivity : Activity() {
     }
 
     @SuppressLint("BatteryLife")
+    /**
+     * Ask once, ever, and only while someone is actually looking.
+     *
+     * This opens a modal Settings dialog on top of the ornament. If it is raised
+     * on a locked or dozing device nobody dismisses it, the ornament never
+     * resumes, and the node therefore never starts — so an unattended phone sits
+     * dead behind a dialog. Hence both guards: a persisted flag so it is asked at
+     * most once, and an interactivity check so it is never raised at a screen
+     * nobody is watching.
+     */
     private fun maybeRequestBatteryOptimizationExemption() {
         if (batteryOptimizationPrompted || Build.VERSION.SDK_INT < 23) return
         val powerManager = getSystemService(PowerManager::class.java) ?: return
         if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
 
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(PREF_BATTERY_PROMPTED, false)) {
+            batteryOptimizationPrompted = true
+            return
+        }
+        if (!powerManager.isInteractive) return
+        val keyguard = getSystemService(KeyguardManager::class.java)
+        if (keyguard != null && keyguard.isKeyguardLocked) return
+
         batteryOptimizationPrompted = true
+        prefs.edit().putBoolean(PREF_BATTERY_PROMPTED, true).apply()
         val packageUri = Uri.parse("package:$packageName")
         val requestIntent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
         runCatching {
@@ -187,6 +208,8 @@ class OrnamentActivity : Activity() {
         private const val TAG = "OrnamentActivity"
         private const val REQUEST_BOOT_CONFIG = 7342
         private const val REQUEST_POST_NOTIFICATIONS = 7343
+        private const val PREFS = "andee-ornament"
+        private const val PREF_BATTERY_PROMPTED = "battery-optimization-prompted"
     }
 }
 

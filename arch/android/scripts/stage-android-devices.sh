@@ -76,9 +76,15 @@ fi
 rm -f "$ANDEE_DEVICE_ROOT/src/lapee_devices.app.src"
 rm -rf "$ANDEE_DEVICE_ROOT/_build/default/lib/andee_devices" \
     "$ANDEE_DEVICE_ROOT/_build/default/lib/lapee_devices"
+# `src/priv` is where the packaged devices keep their assets, but the device
+# overlays also ship a top-level `priv/` (dev_lapee_p4_bootstrap's Lua scripts
+# live there). Merge rather than replace: `rm -rf` here used to discard whatever
+# copy_device_tree had just staged, so `priv/lapee-p4/hyper-token.lua` never
+# reached the build and the P4 bootstrap hook died at boot with `missing_script`,
+# taking the whole node down with it.
 if [ -d "$ANDEE_DEVICE_ROOT/src/priv" ]; then
-    rm -rf "$ANDEE_DEVICE_ROOT/priv"
-    cp -a "$ANDEE_DEVICE_ROOT/src/priv" "$ANDEE_DEVICE_ROOT/priv"
+    mkdir -p "$ANDEE_DEVICE_ROOT/priv"
+    cp -a "$ANDEE_DEVICE_ROOT/src/priv/." "$ANDEE_DEVICE_ROOT/priv/"
 fi
 
 echo "android device package: $ANDEE_DEVICE_ROOT"
