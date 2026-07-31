@@ -1154,7 +1154,8 @@ The device exports:
 - `status`;
 - `admit`;
 - `join`;
-- `member`.
+- `member`;
+- `start`.
 
 Every successful response is AO-Core committed unless already committed by the
 operation. Zone errors return status `400`. Unexpected failures return status
@@ -1651,6 +1652,59 @@ Android runtime root:
   store;
 - `store-id`: the deterministic public ID above, or `null` if no ring address
   is available.
+
+### 8.12 `POST /~zone@1.0/start`
+
+`start` is the boot hook that auto-joins explicitly configured zones once the
+HTTP listener is available. Shipped AndEE config invokes it from `on.start`
+after the mandatory boot measurement hook:
+
+```json
+{
+  "device": "zone@1.0",
+  "path": "start",
+  "method": "POST",
+  "target": "body",
+  "hook": {
+    "result": "ignore"
+  }
+}
+```
+
+`target: body` is required: the hook reads `zone-allow` from the effective
+node message delivered as the request body. Without it the hook inspects
+ambient options, finds no zones, and silently starts nothing.
+
+Zones to join are named by `zone-allow` as an object mapping zone name to
+peer URL. `zone-allow` is not a reserved boot key, so operator configuration
+MAY supply it:
+
+```json
+{
+  "zone-allow": {
+    "alpha": "https://peer.example"
+  }
+}
+```
+
+Behavior:
+
+- When `zone-allow` is an object with at least one valid entry, the device
+  returns `bootstrap = "scheduled"` with the zone names, and joins run
+  asynchronously so boot is not blocked. Each join waits for the local HTTP
+  listener, skips zones already present, and otherwise performs the normal
+  `join` flow against the named peer.
+- Under any other `zone-allow` value — including the default, which permits
+  one zone but names none — the device returns `bootstrap = "not-configured"`
+  and starts nothing. The hook is therefore safe to ship enabled.
+- A `zone-allow` object containing a malformed entry is `invalid` as a whole
+  and starts nothing; it MUST NOT degrade to joining the valid subset.
+- Results are recorded in the node message under `zone-start` as a
+  `zone-start-status` body listing each zone as `joined`, `already-joined`,
+  or `failed`.
+
+Note that `zone-allow` doubles as the admission policy: when it is an object,
+only the zones it names may be installed at all.
 
 ## 9. Error Bodies
 
