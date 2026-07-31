@@ -11,23 +11,18 @@
       "ao-types": "store-module=\"atom\", capacity=\"integer\", batch-size=\"integer\""
     },
     {
-      "store-module": "hb_store_andee_gateway_cache",
-      "negative-cache-ttl-ms": 120000,
-      "ao-types": "store-module=\"atom\", negative-cache-ttl-ms=\"integer\"",
-      "inner-store": {
-        "store-module": "hb_store_gateway",
-        "access": [
-          "read"
-        ],
-        "ao-types": "store-module=\"atom\"",
-        "local-store": false,
-        "preloaded-store": {
-          "store-module": "hb_store_lmdb",
-          "name": "_build/preloaded-store",
-          "capacity": 1073741824,
-          "read-only": true,
-          "ao-types": "store-module=\"atom\""
-        }
+      "store-module": "hb_store_gateway",
+      "access": [
+        "read"
+      ],
+      "ao-types": "store-module=\"atom\"",
+      "local-store": false,
+      "preloaded-store": {
+        "store-module": "hb_store_lmdb",
+        "name": "_build/preloaded-store",
+        "capacity": 1073741824,
+        "read-only": true,
+        "ao-types": "store-module=\"atom\""
       }
     }
   ],
