@@ -17,7 +17,7 @@ limitations.
 | Boot on device | pass, 14–58 s |
 | Operator next-boot config | pass, attested |
 | Measurement / attestation | pass |
-| Tunnel, public reachability | pass |
+| Tunnel, public reachability | pass, `info` 39,027 B |
 | Zone create (AndEE-gated) | pass |
 | Zone survives restart | **fail** |
 | Bundler boots, ledger, payment gate | pass |
@@ -144,6 +144,18 @@ AndEE measurement device, and `admit` matches the joiner's attestation against
 zone templates via `peer_boot_attestation_body/3`. It is **not** verified by a
 live refusal: `admit` requires the joiner to supply its own attestation, so
 demonstrating a refusal needs a second attesting node. One phone, so not done.
+
+### E. Two client-side traps worth knowing (neither is a node defect)
+
+Both cost real time tonight, so they are recorded rather than left to be
+rediscovered:
+
+- **Posting items** needs `content-type: application/ans104`. Octet-stream is
+  rejected as `unsigned-item`.
+- **Reading composites with curl** returns the HTML index page unless
+  `?accept-bundle=true` or `Accept: application/json` is used. Requests through
+  the tunnel work because the router's HyperBEAM client adds `accept-bundle`
+  itself.
 
 ## Configurator
 

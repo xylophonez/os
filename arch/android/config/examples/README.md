@@ -133,3 +133,21 @@ curl -X POST \
 A 200 returns an `id` header equal to the item's own id. Note the shipped
 example sets `bundler-free-byte-limit: 0`, so every item is charged and an
 unfunded caller gets HTTP 402; raise it to exercise the path without tokens.
+
+## Reading composite values with curl
+
+`curl https://<node>/~meta@1.0/info` returns a 2,285-byte HTML index page rather
+than the node message. That is not a fault. HyperBEAM's `accept-bundle` defaults
+to false, and with the httpsig codec a composite value serialises to headers
+with an empty body, which triggers `dev_message:index/3`'s fallback page.
+
+Requests arriving *through the tunnel* work, because the HyperBEAM client on the
+router adds `accept-bundle: true` to outgoing requests. Hand-driven curl does
+not. Use either:
+
+```sh
+curl '.../~meta@1.0/info?accept-bundle=true'      # multipart bundle
+curl -H 'Accept: application/json' '.../~meta@1.0/info'
+```
+
+Scalars (`info/address`, `info/port`) are unaffected.
