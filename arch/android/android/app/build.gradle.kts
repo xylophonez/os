@@ -11,7 +11,7 @@ android {
         minSdk = 29
         targetSdk = 36
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.1.0-alpha.1"
         buildConfigField("int", "MIN_OS_PATCH_LEVEL", "202605")
         buildConfigField("int", "MIN_VENDOR_PATCH_LEVEL", "20260501")
         buildConfigField("int", "MIN_BOOT_PATCH_LEVEL", "20260501")

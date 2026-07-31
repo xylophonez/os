@@ -2254,4 +2254,29 @@ rejected_peer_attestations_require_local_allow_test() ->
         )
     ).
 
+zone_start_hook_test() ->
+    % `andee.json' invokes the `zone@1.0/start' boot hook with
+    % `target: body', so the effective node message arrives as the request
+    % body. The bootstrap map must therefore be read from the body rather
+    % than from the hook's own options, or the shipped hook silently starts
+    % no zones.
+    Configured = #{<<"zone-allow">> => #{<<"alpha">> => <<"http://peer">>}},
+    ?assertEqual(
+        {bootstrap, #{<<"alpha">> => <<"http://peer">>}},
+        zone_allow(start_node_opts(#{<<"body">> => Configured}, #{}))),
+    % Without `target: body' the hook would read the ambient options and
+    % find nothing to start; this is the branch that must not be reached.
+    ?assertEqual({limit, 1}, zone_allow(start_node_opts(#{}, #{}))),
+    % The shipped default is deliberately inert: a node that names no zones
+    % starts none, so the hook is safe to ship enabled.
+    ?assertEqual(
+        {limit, 1},
+        zone_allow(start_node_opts(#{<<"body">> => #{}}, #{}))),
+    % A malformed entry must not degrade to "start everything".
+    ?assertEqual(
+        invalid,
+        zone_allow(start_node_opts(
+            #{<<"body">> => #{<<"zone-allow">> => #{<<"alpha">> => 17}}},
+            #{}))).
+
 -endif.

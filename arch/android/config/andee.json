@@ -67,6 +67,15 @@
         "hook": {
           "result": "ignore"
         }
+      },
+      {
+        "device": "zone@1.0",
+        "path": "start",
+        "method": "POST",
+        "target": "body",
+        "hook": {
+          "result": "ignore"
+        }
       }
     ]
   }
