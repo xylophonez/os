@@ -8,8 +8,9 @@ APK: `0.1.0-alpha.1` (versionCode 1), sha256 `da6ab5f91df371dbbeb7759a3d2cdae761
 ## Summary
 
 The alpha builds, installs, boots, and serves traffic on an ordinary unrooted
-phone, and the zone start hook works end to end. One real defect was found:
-tunneled requests that touch the `store` key never return.
+phone, the zone start hook works end to end, and the tunnel works. One defect
+was found and fixed: tunnelled requests touching the `store` key never
+returned, caused by the now-removed negative-result cache.
 
 | Gate | Result |
 | --- | --- |
@@ -21,7 +22,7 @@ tunneled requests that touch the `store` key never return.
 | Operator next-boot config applied | pass |
 | Zone start hook (Sam's MVP) | pass |
 | Tunnel established, public round trip | pass |
-| Tunnel, requests touching `store` | **fail** |
+| Tunnel, full `~meta@1.0/info` | pass (39027 bytes, ~4 s) |
 
 ## Base choice — why `4f1360d` and not `887eec8`
 
@@ -55,93 +56,52 @@ from the request body (`target: body`) → bootstrap → recorded status. With t
 shipped default the hook reports `not-configured` and starts nothing, so it is
 safe to ship enabled.
 
-## Tunnel defect: isolated to the `store` key
+## Tunnel defect: caused by the negative-result cache (FIXED)
 
-Symptom: `~meta@1.0/info` through the public tunnel never returns. Reproducible
-on every run.
+Symptom: any tunnelled request whose response included `store` never returned,
+including `~meta@1.0/info`, which embeds it. Scalars and every other composite
+were fine, including a 27,996-byte `info/routes`, so it was never a size limit.
+Sam's node on the same router was unaffected.
 
-**It is not a size limit and not the router.** Two earlier revisions of this
-report were wrong — first blaming a ~2 KiB response threshold, then the router
-— and both are corrected here.
+Cause: `store` was the only AndEE-specific subtree in the node message. It
+carried the `hb_store_andee_gateway_cache` wrapper with a nested `inner-store`
+and `preloaded-store`; `store/2/inner-store*` are keys no upstream node emits.
 
-The failure is isolated to a single key. Through our own tunnel:
+That shim was redundant. It and HyperBEAM `c25a8183` (PR #1032) address the same
+problem — empty per-ID Arweave gateway round-trips during a send. The shim was
+written against pin `8b9105d7`, before the upstream fix existed, and memoised
+`not_found` IDs; `c25a8183` fixes the cause by keeping the node message Opts in
+the gateway store's read/cache calls. This release carried both.
 
-| path | bytes | result |
+Fix: drop the wrapper, leaving the plain upstream `hb_store_gateway`. The config
+invariant checker already permitted both shapes, so no checker change was
+needed. `hb_store_andee_gateway_cache` remains in the tree, unreferenced.
+
+Result through the tunnel, same node and router:
+
+| path | before | after |
 | --- | --- | --- |
-| `info/address` | 43 | 200 |
-| `info/port` | 4 | 200 |
-| `info/on` | 2221 | 200 |
-| `info/match-index` | 233 | 200 |
-| `info/arweave-index-store` | 371 | 200 |
-| `info/identities` | 2285 | 200 |
-| **`info/routes`** | **27996** | **200** |
-| **`info/store`** | — | **hangs** |
-| `info` (contains `store`) | — | **hangs** |
+| `~meta@1.0/info/address` | 200, 43 B | 200, 43 B |
+| `~meta@1.0/info/routes` (control) | 200, 27996 B | 200, 27996 B |
+| `~meta@1.0/info/store` | hung | **200, 883 B** |
+| `~meta@1.0/info` | hung | **200, 39027 B, ~4 s (3/3 runs)** |
 
-A 28 KB response transits fine, so response size is irrelevant. Composites are
-fine. Only `store` fails, and `info` fails solely because it embeds `store`.
+Tunnel response POSTs went from 1x202 / 21x500 to **7x202 / 0x500**.
 
-`store` is the one subtree that is AndEE-specific: it holds the
-`hb_store_andee_gateway_cache` wrapper with a nested `inner-store` and
-`preloaded-store` (`store/2/inner-store*` are keys no upstream node has).
-Locally the same key serialises instantly — `info/store?accept-bundle=true`
-returns a 1146-byte bundle in under half a second.
+Two earlier revisions of this report were wrong about this defect — first
+blaming a ~2 KiB response-size threshold, then the router. Both were ruled out
+by direct test: 1 KB-2 MB POSTs all reach the router application, a 28 KB
+response transits fine, and Sam's node returns a 37,292-byte `info` bundle
+through the same host.
 
-Two different failure signatures were observed, which is worth noting for
-whoever picks this up:
+### Follow-up needed
 
-- `~meta@1.0/info`: the node posts the response and the router replies **HTTP
-  500** (an nginx error page), and `dev_tunnel` retries every
-  `?DEFAULT_RETRY_TIME` (1 s). Tally over one session: 1×202, 21×500.
-- `~meta@1.0/info/store`: the node logs **nothing at all** — no response POST is
-  ever attempted, so the request appears to hang inside the node on the tunnel
-  path before a response is produced.
-
-The router is confirmed healthy: Sam's node on the *same* host
-(`7qgyaigiw2hxydtgt57r7kbvdxl5bjuwkdd3mly5gt5qfzcq34nq.smoke.solutions`)
-returns a 37,292-byte `~meta@1.0/info` multipart bundle in ~7 s.
-
-What the phone's log actually shows for a failing request:
-
-```
-received, status: 500, duration: 2491, method: POST,
-  peer: https://smoke.solutions,
-  path: /~tunnel@1.0/response?tunnel-request-id=ADqph…
-
-tunnel_client_response_error, ADqph…, failure ==>
-  Message { body => "<html>..." <2,501 bytes>
-            content-type => text/html
-            server => nginx/1.18.0 (Ubuntu)
-            status => 500 }
-```
-
-The node builds and uploads the response in 1–3 s and the router answers **HTTP
-500 with an nginx error page**. `dev_tunnel` then retries every
-`?DEFAULT_RETRY_TIME` (1 s); the caller sees an indefinite hang, which is what
-made it look like a size cutoff. Successful small responses get a single 202.
-
-Ruled out by direct test:
-
-- **Not a body-size limit anywhere.** POSTing 1 KB - 2 MB bodies straight at
-  `https://smoke.solutions/~tunnel@1.0/response` returns 403 "Tunnel response
-  requires a signature from its address" at *every* size.
-- **Not response size.** `info/routes` returns 27996 bytes through our tunnel.
-- **Not link materialization.** `dev_tunnel` calls `hb_cache:ensure_all_loaded/2`
-  before committing and AndEE's store chain ends in an Arweave gateway, so this
-  was the leading hypothesis; the node log shows zero gateway activity.
-- **Not a stale client device.** The deployed implementation
-  `SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0` already contains
-  `verify_committed/2`, i.e. it is newer than the 2026-07-18
-  `fix/tunnel-response-materialization` merge.
-- **Not the alpha's zone hook.** Composite keys including the new `on` subtree
-  (which carries that hook) transit fine.
-
-Unexplained and worth a look: `~tunnel@1.0/ack` intermittently returns 403, and
-some response POSTs end in `gun_await_process_down ... reason: timeout`.
-
-Next step: instrument the node's tunnel path for `~meta@1.0/info/store`, since
-that request produces no log line at all. A minimal reproducer is a tunneled
-AndEE node and a single GET of `~meta@1.0/info/store`.
+The negcache commit recorded a controlled A/B on a Pixel 9 — empty gateway
+queries 50 -> 4 (~92%) — but that was measured against pin `8b9105d7`, i.e.
+without the upstream fix. That win is now expected to come from `c25a8183`
+instead. Re-run the same send workload to confirm the query volume is still low
+without the shim, otherwise a measured improvement has been traded for an
+assumed one.
 
 ## Stale pin in the tunnel smoke script
 
