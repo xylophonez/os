@@ -9,7 +9,7 @@ APK: `0.1.0-alpha.1` (versionCode 1), sha256 `da6ab5f91df371dbbeb7759a3d2cdae761
 
 The alpha builds, installs, boots, and serves traffic on an ordinary unrooted
 phone, and the zone start hook works end to end. One real defect was found:
-the tunnel drops responses larger than about 2 KiB.
+tunneled requests that touch the `store` key never return.
 
 | Gate | Result |
 | --- | --- |
@@ -21,7 +21,7 @@ the tunnel drops responses larger than about 2 KiB.
 | Operator next-boot config applied | pass |
 | Zone start hook (Sam's MVP) | pass |
 | Tunnel established, public round trip | pass |
-| Tunnel, responses over ~2 KiB | **fail** |
+| Tunnel, requests touching `store` | **fail** |
 
 ## Base choice — why `4f1360d` and not `887eec8`
 
