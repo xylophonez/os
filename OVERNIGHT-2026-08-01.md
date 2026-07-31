@@ -7,9 +7,9 @@ Configurator: `arweave://andee-configurator`, pushed at `9f439e8`
 ## Summary
 
 The node builds, boots, serves, tunnels, takes operator config, and creates an
-AndEE-attested zone. Bundling now starts and enforces payment but **cannot
-accept items**. Execution **cannot run at all** — the device is not in the
-build. Four defects were found and three fixed.
+AndEE-attested zone. Bundling works end to end. Execution **cannot run at all** — the device is not
+in the build. Three defects were found and fixed; one remains, plus two
+limitations.
 
 | Capability | Result |
 | --- | --- |
@@ -21,7 +21,7 @@ build. Four defects were found and three fixed.
 | Zone create (AndEE-gated) | pass |
 | Zone survives restart | **fail** |
 | Bundler boots, ledger, payment gate | pass |
-| Bundler accepts an item | **fail** |
+| Bundler accepts an item | pass |
 | Andock execution | **fail — device not shipped** |
 | Configurator UI | pass, 12 tests |
 
@@ -65,36 +65,32 @@ action only appears once a public URL has been verified to answer. Launcher icon
 restored (it was missing entirely — no resources, no `android:icon`) and the
 beam repositioned so its tip clears the adaptive-icon safe zone.
 
-## Open defects
+## Findings
 
-### A. Bundler rejects valid ANS-104 items
+### A. Bundling — works, with a content-type trap (resolved)
 
-`~bundler@1.0/tx` answers, enforces payment (402 "Insufficient funds"), and
-passes the gate once `bundler-free-byte-limit` is raised. It then rejects every
-item:
+`~bundler@1.0/tx` boots, creates the P4 ledger, enforces payment (402
+"Insufficient funds"), and passes the gate once `bundler-free-byte-limit` is
+raised. It then **accepts signed ANS-104 items**:
 
 ```
-{"details":"unsigned-item","error":"invalid-item","status":400}
+local id : R4rB2fwKWMzB9IPQXASK_lyptOpfOH8iVxmpHxiUPgA
+id header: R4rB2fwKWMzB9IPQXASK_lyptOpfOH8iVxmpHxiUPgA
+status   : 200      ID MATCH: true
 ```
 
-Controlled: the **same signed item**, in the same process, was
+**The trap.** Posting with `content-type: application/octet-stream` — which is
+what the reference-owner script uses against the production bundler — is
+rejected with `{"error":"invalid-item","details":"unsigned-item"}`. The body
+arrives as a raw binary, `hb_message:signers/2` finds nothing, and the item
+reads as unsigned. The working content type is **`application/ans104`**, which
+selects the ans104 codec and decodes the body before verification.
 
-- `isSigned: true`, signature verifies locally
-- **accepted 200 by `bundler.mystical.computer`**
-- **rejected 400 by the phone**
-
-Five posting variants (`/tx` and `/item`, with and without `bundler-subject:
-body`, three content types) all fail identically.
-
-Lead, not yet isolated: `hb_util` routes all base64url decoding through
-`b64veryfast:decode64_url_unchecked`, and this lineage has a recorded
-`b64veryfast` corruption landmine for URL-decodes over 32 bytes. An ANS-104
-signature is 512 bytes. That would make a valid item verify as unsigned. Also
-possible: `bundler.mystical.computer` was patched on 2026-07-24 for exactly this
-path and the patch is not in our pin (`c25a8183`).
-
-Next step: decode a >32-byte base64url value on-device and compare against the
-Erlang implementation.
+I spent a while chasing this as a node defect and it was not one — two theories
+were wrong and are recorded so nobody repeats them: `b64veryfast` decodes
+correctly at every size on the host including 512 bytes, and `bundler-subject`
+support *is* present in this pin (`dev_bundler.erl:42`), as is `dev_bundler`
+itself, as a preloaded device.
 
 ### B. Andock execution is not in the build
 
@@ -159,7 +155,7 @@ half of the LapEE original is gone (no FAT/GPT reader, no wifi); output is
 
 - Live zone-admission refusal (needs a second node)
 - Andock execution (needs the cross-repo decision above)
-- Real bundling (blocked by defect A)
+- Bundling beyond acceptance: dispatch to Arweave was not observed end to end (the item is accepted and queued; settlement needs a funded ledger).
 - The terminate-button scenario step, which taps a hardcoded coordinate and
   cannot land on a dozing screen. The scenario it belongs to passed
   (`verdict.json`: meta 200, boot 200, attested marker matched).

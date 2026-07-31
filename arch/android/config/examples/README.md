@@ -112,3 +112,24 @@ HyperBEAM and returns HTTP 500 for `~zone@1.0/...`, so it cannot host an
 AndEE-attested zone without the whole device tree being deployed there first.
 `smoke.solutions` does have the devices (`~zone@1.0/status` answers 200) but
 creating a zone on it needs that node's operator key.
+
+## Posting items to the bundler
+
+Use `content-type: application/ans104`. Posting a signed ANS-104 item as
+`application/octet-stream` is rejected with
+`{"error":"invalid-item","details":"unsigned-item"}`: the body arrives as a raw
+binary, `hb_message:signers/2` finds no commitments, and the item reads as
+unsigned. `application/ans104` selects the ans104 codec, which decodes the body
+before verification.
+
+```sh
+curl -X POST \
+  -H 'content-type: application/ans104' \
+  -H 'bundler-subject: body' \
+  --data-binary @item.ans104 \
+  http://127.0.0.1:8734/~bundler@1.0/tx
+```
+
+A 200 returns an `id` header equal to the item's own id. Note the shipped
+example sets `bundler-free-byte-limit: 0`, so every item is charged and an
+unfunded caller gets HTTP 402; raise it to exercise the path without tokens.
