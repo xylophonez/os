@@ -1,0 +1,110 @@
+{
+  "andee-profile-source": "lapee-bundler-profile-paid@ac239012fcb0 + zone-allow",
+  "lapee-profile": "aopayment-bundler-p4-paid-remote",
+  "lapee-allow-request-trusted-ca": true,
+  "http-client-prefer-ipv4": true,
+
+  "zone-allow": {
+    "REPLACE-ME-zone-name": "https://REPLACE-ME-zone-peer"
+  },
+
+  "on": {
+    "start": [
+      {
+        "device": "tunnel@1.0",
+        "method": "POST",
+        "path": "connect",
+        "peer": "https://smoke.solutions",
+        "workers": 3,
+        "hook": {
+          "result": "ignore"
+        }
+      },
+      {
+        "device": "RSQlLsmPZwwk7mxZuwMziGBFTMSTJT9OHm1xlq6MzrQ"
+      }
+    ],
+    "request": [
+      {
+        "device": "manifest@1.0"
+      }
+    ]
+  },
+
+  "trusted-device-signers": [
+    "q5Fcm0NJ34-ss3E1R9dgjGKLLA0B-KYw0J_6U-Pck6o",
+    "aYDOU6kEcE3lK7aA-gTmUKHTbLlQnZZXWpv1_i_Uq1U",
+    "vZY2XY1RD9HIfWi8ift-1_DnHLDadZMWrufSh-_rKF0"
+  ],
+
+  "name-resolvers": [
+    {
+      "ao-payment@1.0": "7eAMYQ9PG8esiP-XIz1UoP78aI1htNgdtHqSbNm94X4",
+      "arweave-byte-pricing@1.0": "LMByssb9jjrc2DUQOucor4t0Zni0JOViiY6PZmGgHRU",
+      "bundler-settlement@1.0": "Nu-wM8Pdq4r6MTOKYFXnM6Jn0vAeGI732l-TsOcmazY",
+      "lapee-bundler-gc@1.0": "obuc_4WtzF1vHZT17s3iV07O-qzgQuSAfmjECpehcYQ",
+      "lapee-p4-bootstrap@1.0": "RSQlLsmPZwwk7mxZuwMziGBFTMSTJT9OHm1xlq6MzrQ",
+      "pricing-router@1.0": "UH8LNK2WMtgVBhQ6YCkk5dPyKbp3hHsb9pWCznVfYNA",
+      "simple-oracle@1.0": "SGIOFvYoRKYIj3bC9_3Ggv2n0lNCOoSRrWJyHUrKeKg"
+    },
+    {
+      "device": "arweave@2.9"
+    },
+    {
+      "device": "b32-name@1.0"
+    },
+    "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8~json@1.0/deserialize&target=data"
+  ],
+
+  "trusted-devices": {
+    "ao-payment@1.0": "EJwu47Q0MK2DMjohTRX4kNYc7QLiXZmKq3s8QLTgTX4",
+    "7eAMYQ9PG8esiP-XIz1UoP78aI1htNgdtHqSbNm94X4": "EJwu47Q0MK2DMjohTRX4kNYc7QLiXZmKq3s8QLTgTX4",
+    "arweave-byte-pricing@1.0": "XE8fg4poXwCYdMJm4uDFhlC3RQ7FuOKDtb8gSxbakm0",
+    "LMByssb9jjrc2DUQOucor4t0Zni0JOViiY6PZmGgHRU": "XE8fg4poXwCYdMJm4uDFhlC3RQ7FuOKDtb8gSxbakm0",
+    "bundler-settlement@1.0": "oeJGtUCutNdfszNuwGs0r7VW_inRhuFl_nDYraIRWjk",
+    "Nu-wM8Pdq4r6MTOKYFXnM6Jn0vAeGI732l-TsOcmazY": "oeJGtUCutNdfszNuwGs0r7VW_inRhuFl_nDYraIRWjk",
+    "lapee-bundler-gc@1.0": "AKXhtDqE_U7L275NMuZAqLvJm6rREgHajkfez1ugLTk",
+    "obuc_4WtzF1vHZT17s3iV07O-qzgQuSAfmjECpehcYQ": "AKXhtDqE_U7L275NMuZAqLvJm6rREgHajkfez1ugLTk",
+    "lapee-p4-bootstrap@1.0": "0ER8jwnxByvfp0IXfgI1U_nypaq9x_Y0-NGbB68Ii0Y",
+    "RSQlLsmPZwwk7mxZuwMziGBFTMSTJT9OHm1xlq6MzrQ": "0ER8jwnxByvfp0IXfgI1U_nypaq9x_Y0-NGbB68Ii0Y",
+    "pricing-router@1.0": "e1T6L5u7dgj6nMkj3z7pUQjBrMWQdahm5xy5PV5tXOg",
+    "UH8LNK2WMtgVBhQ6YCkk5dPyKbp3hHsb9pWCznVfYNA": "e1T6L5u7dgj6nMkj3z7pUQjBrMWQdahm5xy5PV5tXOg",
+    "simple-oracle@1.0": "cEwxPCEk3WIYbWmeXOKlYsvLLBUKeB44P5F2y2FftaI",
+    "SGIOFvYoRKYIj3bC9_3Ggv2n0lNCOoSRrWJyHUrKeKg": "cEwxPCEk3WIYbWmeXOKlYsvLLBUKeB44P5F2y2FftaI",
+    "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0"
+  },
+
+  "bundler-beneficiary": "kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI",
+  "bundler-ans104": "https://up.arweave.net:443",
+  "bundler-premium": 0,
+  "bundler-free-byte-limit": 0,
+  "bundler-max-items": 1000,
+  "bundler-max-bundle-dispatch-delay": 2000,
+  "lapee-bundler-completed-item-retention-ms": 0,
+  "simple-pay-price": 0,
+  "ao-payment-ledger": "ledger",
+  "ao-payment-ledger-path": "/ledger~node-process@1.0",
+  "arweave-byte-price": "dynamic",
+  "arweave-mempool-copycat-on-bundle-complete": true,
+  "arweave-mempool-progress": true,
+  "metering-rates": {
+    "beam-reductions": 0
+  },
+
+  "router-opts": {
+    "offered": [
+      {
+        "template": "/.*~process@1.0/.*",
+        "price": 0
+      },
+      {
+        "template": "/~bundler@1.0/tx",
+        "price": 0
+      },
+      {
+        "template": "/~bundler@1.0/item",
+        "price": 0
+      }
+    ]
+  }
+}
