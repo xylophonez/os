@@ -55,35 +55,59 @@ from the request body (`target: body`) → bootstrap → recorded status. With t
 shipped default the hook reports `not-configured` and starts nothing, so it is
 safe to ship enabled.
 
-## Tunnel defect: responses over ~2 KiB never arrive
+## Tunnel defect: the router 500s on larger responses
 
-Reproducible on every run. Public host derived from the node address as usual.
+Symptom: `~meta@1.0/info` through the public tunnel host never returns, while
+`info/address` and `info/port` return in ~5 s. Reproducible on every run.
 
-| Response size (bytes) | Public result |
-| --- | --- |
-| 4 (`info/port`) | 200, 5.4 s |
-| 43 (`info/address`) | 200, 5.6 s |
-| 2035 (404 body) | 404 delivered, 7.8 s |
-| 2285 (`info`) | **no response, 0 bytes, times out** |
-| 9152 (`info` as JSON) | **no response, 0 bytes, times out** |
+**This is a failure at the tunnel router, not on the phone.** An earlier
+revision of this report described it as a ~2 KiB response-size threshold. That
+was wrong, and is corrected here.
 
-The boundary lies between 2035 and 2285 bytes, i.e. almost certainly 2048.
-The client receives zero bytes — the response never starts, rather than
-truncating partway.
+What the phone's log actually shows for a failing request:
 
-The node is not at fault: it serves the same paths locally in under 0.5 s and
-emits much larger bodies locally without trouble (2406, 2501, 2550, 9152 and
-273706 bytes all logged as sent).
+```
+received, status: 500, duration: 2491, method: POST,
+  peer: https://smoke.solutions,
+  path: /~tunnel@1.0/response?tunnel-request-id=ADqph…
 
-Node-side evidence points at the response upload leg. Successful tunnel
-requests produce exactly one `POST /~tunnel@1.0/response?tunnel-request-id=…`
-returning 202. The three failing `info` probes produced three request-ids
-retried 8, 9 and 10 times respectively — the node keeps re-uploading and the
-caller keeps waiting.
+tunnel_client_response_error, ADqph…, failure ==>
+  Message { body => "<html>..." <2,501 bytes>
+            content-type => text/html
+            server => nginx/1.18.0 (Ubuntu)
+            status => 500 }
+```
 
-Also seen in tunnel control traffic during the run: `~tunnel@1.0/ack` and
-`~tunnel@1.0/register` returned 403 five times and 404 eight times. Not
-investigated; may or may not be related.
+The node builds and uploads the response in 1–3 s and the router answers **HTTP
+500 with an nginx error page**. `dev_tunnel` then retries every
+`?DEFAULT_RETRY_TIME` (1 s); the caller sees an indefinite hang, which is what
+made it look like a size cutoff. Successful small responses get a single 202.
+
+Ruled out by direct test:
+
+- **Not a body-size limit anywhere in the path.** POSTing 1 KB → 2 MB bodies
+  straight at `https://smoke.solutions/~tunnel@1.0/response` returns 403
+  "Tunnel response requires a signature from its address" at *every* size, so
+  nginx forwards multi-megabyte bodies and the application receives them.
+- **Not link materialization on the phone.** `dev_tunnel` calls
+  `hb_cache:ensure_all_loaded/2` before committing a response, and AndEE's store
+  chain ends in an Arweave gateway, so this was the leading hypothesis. The node
+  log shows **zero** gateway or Arweave activity during the failures.
+- **Not a stale client device.** The deployed implementation
+  `SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0` already contains
+  `verify_committed/2` and `without_transport_commitment`, i.e. it is newer than
+  the 2026-07-18 `fix/tunnel-response-materialization` merge.
+
+So the router rejects our larger *signed* response specifically. The 500 is
+served by nginx rather than by HyperBEAM, so the upstream either errored with no
+body or died handling the request. Diagnosing further needs the router's own
+logs.
+
+Also seen during the run, unexplained: `~tunnel@1.0/ack` intermittently returns
+403, and some response POSTs end in `gun_await_process_down … reason: timeout`.
+
+Next step is to repeat against a different tunnel router. Large requests are
+reported to work against other hosts, which would pin this to `smoke.solutions`.
 
 ## Stale pin in the tunnel smoke script
 
