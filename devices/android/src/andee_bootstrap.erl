@@ -87,7 +87,7 @@ ensure_preloaded_store() ->
 ensure_custom_store_modules() ->
     lists:foreach(
         fun(Module) -> catch code:ensure_loaded(Module) end,
-        [hb_store_andee_gateway_cache, hb_store_andee_encrypted]
+        [hb_store_andee_encrypted]
     ).
 
 start_store(Opts) ->

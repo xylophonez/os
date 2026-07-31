@@ -75,7 +75,8 @@ the gateway store's read/cache calls. This release carried both.
 
 Fix: drop the wrapper, leaving the plain upstream `hb_store_gateway`. The config
 invariant checker already permitted both shapes, so no checker change was
-needed. `hb_store_andee_gateway_cache` remains in the tree, unreferenced.
+needed. The now-unused `hb_store_andee_gateway_cache` module, its
+bootstrap preload and the invariant clause that permitted it were removed too.
 
 Result through the tunnel, same node and router:
 

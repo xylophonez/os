@@ -91,16 +91,7 @@ def is_runtime_store(value: Any) -> bool:
         "local-store": False,
         "preloaded-store": preloaded,
     }
-    # The remote gateway store is wrapped in the AndEE negative-result cache
-    # shim, which serves the preloaded store and gateway unchanged and only
-    # short-circuits repeated empty ID lookups.
-    cached_gateway = {
-        "store-module": "hb_store_andee_gateway_cache",
-        "negative-cache-ttl-ms": 120000,
-        "ao-types": 'store-module="atom", negative-cache-ttl-ms="integer"',
-        "inner-store": gateway,
-    }
-    return value in ([persistent, gateway], [persistent, cached_gateway])
+    return value == [persistent, gateway]
 
 
 def is_volatile_arweave_index_store(value: Any) -> bool:
