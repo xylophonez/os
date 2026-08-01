@@ -59,6 +59,8 @@ class OrnamentActivity : Activity() {
             object : OrnamentView.Actions {
                 override fun pickNextBootConfig() = this@OrnamentActivity.pickNextBootConfig()
                 override fun terminate() = this@OrnamentActivity.terminateApp()
+                override fun openConfigurator() =
+                    this@OrnamentActivity.openConfigurator()
             },
         )
         setContentView(ornamentView)
@@ -150,6 +152,14 @@ class OrnamentActivity : Activity() {
         finishAndRemoveTask()
     }
 
+    private fun openConfigurator() {
+        try {
+            startActivity(Intent(this, ConfiguratorActivity::class.java))
+        } catch (exc: Exception) {
+            Log.e(TAG, "failed to open configurator", exc)
+        }
+    }
+
     private fun maybeRequestNotificationPermission() {
         if (
             Build.VERSION.SDK_INT >= 33 &&
@@ -220,6 +230,7 @@ private class OrnamentView(
     interface Actions {
         fun pickNextBootConfig()
         fun terminate()
+        fun openConfigurator()
     }
 
     private val mono = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
@@ -238,6 +249,7 @@ private class OrnamentView(
     private var qrBitmapStatus: NodeStatus? = null
     private var qrBitmapPending = false
     private val configButtonBounds = RectF()
+    private val configuratorButtonBounds = RectF()
     private val clipBounds = Rect()
     private val clipBoundsF = RectF()
     private val animationDirty = Rect()
@@ -878,9 +890,16 @@ private class OrnamentView(
             textY += textPaint.textSize * 1.35f
         }
         drawConfigButton(canvas, qrX, controlY, qrSize)
+        drawConfiguratorButton(canvas, qrX, controlY + dp(44f) + dp(8f), qrSize)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action == MotionEvent.ACTION_UP &&
+            configuratorButtonBounds.contains(event.x, event.y)
+        ) {
+            actions.openConfigurator()
+            return true
+        }
         val inside = configButtonBounds.contains(event.x, event.y)
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -929,6 +948,34 @@ private class OrnamentView(
         val textX = x + (width - textWidth) / 2f
         val textY = y + (height - metrics.ascent - metrics.descent) / 2f
         canvas.drawText(label, textX, textY, textPaint)
+    }
+
+    private fun drawConfiguratorButton(canvas: Canvas, x: Float, y: Float, width: Float) {
+        val height = dp(36f)
+        configuratorButtonBounds.set(x, y, x + width, y + height)
+
+        // Outlined rather than filled: secondary to LOAD CONFIG above it.
+        rectPaint.style = Paint.Style.STROKE
+        rectPaint.strokeWidth = dp(1.2f)
+        rectPaint.color = Color.WHITE
+        rectPaint.alpha = 190
+        canvas.drawRect(configuratorButtonBounds, rectPaint)
+        rectPaint.style = Paint.Style.FILL
+        rectPaint.alpha = 255
+
+        textPaint.typeface = mono
+        textPaint.textSize = (width / 20f).coerceIn(dp(9f), dp(14f))
+        textPaint.color = Color.WHITE
+        textPaint.clearShadowLayer()
+        val label = "CONFIGURE"
+        val textWidth = textPaint.measureText(label)
+        val metrics = textPaint.fontMetrics
+        canvas.drawText(
+            label,
+            x + (width - textWidth) / 2f,
+            y + (height - metrics.ascent - metrics.descent) / 2f,
+            textPaint,
+        )
     }
 
     private fun burstAlpha(phase: Float): Float =
