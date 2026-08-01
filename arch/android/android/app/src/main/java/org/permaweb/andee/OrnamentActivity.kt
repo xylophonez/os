@@ -890,7 +890,7 @@ private class OrnamentView(
             textY += textPaint.textSize * 1.35f
         }
         drawConfigButton(canvas, qrX, controlY, qrSize)
-        drawConfiguratorButton(canvas, qrX, controlY + dp(44f) + dp(8f), qrSize)
+        drawConfiguratorButton(canvas, labelX, qrY, labelWidth)
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
