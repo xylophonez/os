@@ -39,6 +39,13 @@ class ConfiguratorActivity : Activity() {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
+            // Without these the WebView lays out at a ~980px desktop viewport and
+            // ignores the page's width=device-width, so a mobile-first page still
+            // spills off the side of the screen.
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
             // The page is static and self-contained; nothing needs file or
             // content access, so leave those off.
             settings.allowFileAccess = false
@@ -108,10 +115,45 @@ class ConfiguratorActivity : Activity() {
         private const val TAG = "ConfiguratorActivity"
 
         /** Arweave path manifest for the configurator app. */
-        const val CONFIGURATOR_TX = "Pq23TZLGlQ4xY87ntJwG322AwtDfAdJPGHm1JqJsSQ0"
+        const val CONFIGURATOR_TX = "2KfDlu6er-pu4r6zWZoUniZZye_n_KNfZ1UbjE3KBhU"
         const val CONFIGURATOR_URL = "https://arweave.net/$CONFIGURATOR_TX/"
 
+        /**
+         * Gateways sandbox a manifest by 302-ing to a per-transaction subdomain
+         * whose label is base32(transaction id). That redirect is a different
+         * origin, so allowing only the gateway path blocks the load and the
+         * WebView renders nothing at all. Derived rather than pinned: a redeploy
+         * changes the id, and a stale label would black-screen it again.
+         */
+        private val CONFIGURATOR_SANDBOX: String by lazy {
+            val raw = android.util.Base64.decode(
+                CONFIGURATOR_TX,
+                android.util.Base64.URL_SAFE or android.util.Base64.NO_PADDING
+                    or android.util.Base64.NO_WRAP,
+            )
+            base32Lower(raw)
+        }
+
+        /** RFC 4648 base32, lowercase, unpadded — the gateway's sandbox label. */
+        private fun base32Lower(bytes: ByteArray): String {
+            val alphabet = "abcdefghijklmnopqrstuvwxyz234567"
+            val out = StringBuilder()
+            var buffer = 0
+            var bits = 0
+            for (b in bytes) {
+                buffer = (buffer shl 8) or (b.toInt() and 0xff)
+                bits += 8
+                while (bits >= 5) {
+                    out.append(alphabet[(buffer shr (bits - 5)) and 0x1f])
+                    bits -= 5
+                }
+            }
+            if (bits > 0) out.append(alphabet[(buffer shl (5 - bits)) and 0x1f])
+            return out.toString()
+        }
+
         fun isConfiguratorUrl(url: String): Boolean =
-            url.startsWith("https://arweave.net/$CONFIGURATOR_TX")
+            url.startsWith("https://arweave.net/$CONFIGURATOR_TX") ||
+                url.startsWith("https://$CONFIGURATOR_SANDBOX.arweave.net/")
     }
 }
