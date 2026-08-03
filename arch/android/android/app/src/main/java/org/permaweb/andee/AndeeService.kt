@@ -23,6 +23,7 @@ import javax.net.ssl.HttpsURLConnection
 
 class AndeeService : Service() {
     private var cryptoAgent: AndeeCryptoAgent? = null
+    private var executionManager: AndeeExecutionManager? = null
     private var hyperbeamRuntime: HyperbeamRuntime? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var starterThread: Thread? = null
@@ -77,16 +78,23 @@ class AndeeService : Service() {
         if (hyperbeamRuntime?.isAlive() == true || starterThread?.isAlive == true) return
         Thread {
             var agent: AndeeCryptoAgent? = null
+            var execution: AndeeExecutionManager? = null
             var runtime: HyperbeamRuntime? = null
             try {
                 val runtimeRoot = RuntimeExtractor(this).extractIfNeeded()
+                // Must bind before HyperBEAM starts: HyperbeamRuntime exports
+                // ANDEE_EXECUTION_SOCKET, and andock@1.0 fails closed with 503
+                // if nothing is listening on it.
+                execution = AndeeExecutionManager(this, runtimeRoot).also { it.start() }
                 val currentAgent = AndeeCryptoAgent(this).also { it.start() }
                 agent = currentAgent
                 if (stopping) {
                     currentAgent.close()
+                    execution.close()
                     return@Thread
                 }
                 cryptoAgent = currentAgent
+                executionManager = execution
                 val policy = currentAgent.policyStatus()
                 if (!policy.optBoolean("accepted", false)) {
                     Log.w(TAG, "policy rejected; starting HyperBEAM for rejected measurement")
@@ -95,6 +103,7 @@ class AndeeService : Service() {
                 if (stopping) {
                     runtime?.close()
                     agent?.close()
+                    execution?.close()
                     return@Thread
                 }
                 hyperbeamRuntime = runtime
@@ -106,6 +115,7 @@ class AndeeService : Service() {
                 Log.e(TAG, "failed to start AndEE runtime", exc)
                 runtime?.close()
                 agent?.close()
+                execution?.close()
                 stopSelf()
             } finally {
                 starterThread = null
@@ -155,6 +165,8 @@ class AndeeService : Service() {
         hyperbeamRuntime = null
         cryptoAgent?.close()
         cryptoAgent = null
+        executionManager?.close()
+        executionManager = null
         starterThread = null
         releaseRuntimeWakeLock()
     }
