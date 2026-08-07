@@ -1,0 +1,60 @@
+{
+  "_note": "A LapEE running as a tunnel broker that charges for the traffic it carries, and publishes a location record so it can be found. Replace the signers, the device pins, the ledger address and location-url with your own.",
+
+  "_note-rates": "metering@1.0 sizes the bodies P4 gives it: request-bytes is what arrives, response-bytes is what the node returns. A tunnelled node POSTs its payload to the broker, so the traffic a tunnel serves to the public arrives here as a REQUEST. Selling egress therefore means pricing request-bytes.",
+
+  "_note-price": "1 base unit per byte, roughly $2/TB: an AO token is 1e12 base units and trades around $2. Sizes are of the ETF encoding, not wire octets, so calibrate against observed traffic.",
+
+  "trusted-device-signers": [
+    "kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI",
+    "ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k"
+  ],
+
+  "trusted-devices": {
+    "tunnel@1.0": "REPLACE-WITH-THE-TUNNEL-IMPLEMENTATION-YOU-TRUST",
+    "p4@1.0": "LCzufj9RRui3F1jfkx0_9_PYhRAwGXm1vxJT0UzLihs"
+  },
+
+  "metering-rates": {
+    "request-bytes": 1,
+    "response-bytes": 0,
+    "beam-reductions": 0
+  },
+
+  "_note-ledger": "Seed each node allowed to rent a tunnel. 1e12 base units is 1 AO, about 1 TB of egress at the rate above. Seed generously while testing: a 402 writes the negative balance before testing it and never reverses it, and requeued deliveries re-charge per dispatch.",
+  "simple-pay-ledger": {
+    "REPLACE-WITH-TUNNELLED-NODE-ADDRESS": 1000000000000
+  },
+
+  "_note-location": "The location@1.0 start hook publishes a signed record naming this node's public URL, which is how clients discover it. location-url is published verbatim and permanently; left unset it is built from node_host and port and claims http://localhost:8734. init prepends this hook to the enforced measurement and zone hooks, so both still run and measurement still measures the final node.",
+  "location-url": "https://REPLACE-WITH-YOUR-PUBLIC-TUNNEL-URL",
+  "location-ttl": 2419200000,
+
+  "_note-hooks": "p4@1.0 must precede tunnel@1.0 in on/request: p4 opens the metering session in the request hook and prices it in the response hook, and metering@1.0 measures between the two. Reverse the order and nothing is priced.",
+  "on": {
+    "start": [
+      {
+        "device": "location@1.0",
+        "path": "node",
+        "method": "GET",
+        "hook": { "result": "ignore" }
+      }
+    ],
+    "request": [
+      {
+        "device": "p4@1.0",
+        "pricing-device": "metering@1.0",
+        "ledger-device": "simple-pay@1.0"
+      },
+      {
+        "device": "tunnel@1.0",
+        "path": "request"
+      }
+    ],
+    "response": {
+      "device": "p4@1.0",
+      "pricing-device": "metering@1.0",
+      "ledger-device": "simple-pay@1.0"
+    }
+  }
+}
