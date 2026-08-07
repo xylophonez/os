@@ -69,6 +69,7 @@ endef
 HYPERBEAM_PRE_BUILD_HOOKS += HYPERBEAM_PIN_REBAR_PLUGINS
 
 HYPERBEAM_DEVICE_DIR ?= /build/common-devices
+HYPERBEAM_PKGDIR = $(BR2_EXTERNAL_LAPEE_PATH)/package/hyperbeam
 
 # Buildroot exports HyperBEAM from a git checkout into a plain source
 # tree, so rebar's build-info hooks cannot rely on `.git' being
@@ -330,6 +331,11 @@ define HYPERBEAM_BUILD_CMDS
 	mkdir -p $(@D)/_build/lapee-preload-src
 	cp -a $(@D)/src/preloaded $(@D)/_build/lapee-preload-src/preloaded
 	rm -f $(@D)/_build/lapee-preload-src/preloaded/auth/dev_snp.erl
+	# Device sources applied to the preload copy only, never to $(@D)/src,
+	# so the built tree matches upstream. Same mechanism as the dev_snp
+	# removal above.
+	cp -af $(HYPERBEAM_PKGDIR)/device-overrides/dev_metering.erl \
+	    $(@D)/_build/lapee-preload-src/preloaded/payment/dev_metering.erl
 	cd $(@D) && $(HYPERBEAM_HOST_BUILD_ENV) ./rebar3 device preload \
 	    --device-src _build/lapee-preload-src/preloaded,$(HYPERBEAM_DEVICE_DIR)/src \
 	    --output-dir _build/preloaded-store
