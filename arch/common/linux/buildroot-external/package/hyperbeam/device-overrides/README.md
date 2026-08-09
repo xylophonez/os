@@ -6,7 +6,7 @@ over the preload **copy** under `_build/lapee-preload-src`, never over
 
 | File | Upstream branch | Taken at |
 | --- | --- | --- |
-| `dev_metering.erl` | `xylophonez/hyperbeam` `feat/meter-request-response-bytes` | `edge` + 1 |
+| `dev_metering.erl` | `xylophonez/hyperbeam` `feat/meter-request-response-bytes` | `bad7db4d7` |
 
 These are snapshots, not links, and drift silently. Check the upstream branch
 before rebuilding, and delete the override once it lands upstream.
