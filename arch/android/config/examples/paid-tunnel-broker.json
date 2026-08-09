@@ -1,43 +1,38 @@
 {
   "_note": "A LapEE running as a tunnel broker that charges for the traffic it carries, and publishes a location record so it can be found. Replace the signers, the device pins, the ledger address and location-url with your own.",
-
-  "_note-rates": "metering@1.0 sizes the bodies P4 gives it: request-bytes is what arrives, response-bytes is what the node returns. A tunnelled node POSTs its payload to the broker, so the traffic a tunnel serves to the public arrives here as a REQUEST. Selling egress therefore means pricing request-bytes.",
-
+  "_note-rates": "metering@1.0 sizes the bodies P4 gives it: request-bytes is what arrives at this node, response-bytes is what it returns. Which one bills a relay is not obvious -- a caller's upload arrives here as the RESULT of the tunnelled node's registration long-poll, so it bills as response-bytes, while a payload the tunnel serves back arrives as the REQUEST of that node's response POST. Both are set to 1 below, which is what the measurement in the billing note used.",
   "_note-price": "1 base unit per byte, roughly $2/TB: an AO token is 1e12 base units and trades around $2. Sizes are of the ETF encoding, not wire octets, so calibrate against observed traffic.",
-
   "trusted-device-signers": [
     "kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI",
     "ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k"
   ],
-
   "trusted-devices": {
-    "tunnel@1.0": "REPLACE-WITH-THE-TUNNEL-IMPLEMENTATION-YOU-TRUST",
+    "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0",
     "p4@1.0": "LCzufj9RRui3F1jfkx0_9_PYhRAwGXm1vxJT0UzLihs"
   },
-
   "metering-rates": {
     "request-bytes": 1,
-    "response-bytes": 0,
+    "response-bytes": 1,
     "beam-reductions": 0
   },
-
   "_note-ledger": "Seed each node allowed to rent a tunnel. 1e12 base units is 1 AO, about 1 TB of egress at the rate above. Seed generously while testing: a 402 writes the negative balance before testing it and never reverses it, and requeued deliveries re-charge per dispatch.",
   "simple-pay-ledger": {
     "REPLACE-WITH-TUNNELLED-NODE-ADDRESS": 1000000000000
   },
-
   "_note-location": "The location@1.0 start hook publishes a signed record naming this node's public URL, which is how clients discover it. location-url is published verbatim and permanently; left unset it is built from node_host and port and claims http://localhost:8734. init prepends this hook to the enforced measurement and zone hooks, so both still run and measurement still measures the final node.",
   "location-url": "https://REPLACE-WITH-YOUR-PUBLIC-TUNNEL-URL",
   "location-ttl": 2419200000,
-
   "_note-hooks": "p4@1.0 must precede tunnel@1.0 in on/request: p4 opens the metering session in the request hook and prices it in the response hook, and metering@1.0 measures between the two. Reverse the order and nothing is priced.",
+  "_note-billing": "WHAT IS BILLED TODAY, measured 2026-08-09 on tunnel@1.0 49d5fa8. Traffic a caller sends THROUGH the tunnel is billed: it arrives as the result of the tunnelled node's registration long-poll, whose hook chain completes normally. Traffic the tunnel SERVES BACK is not: the node posts it to /~tunnel@1.0/response, the tunnel device answers that hook with {error, _} to mean 'handled', hb_hook:execute_handlers halts on any non-ok status, and dev_meta then skips its response hook -- which is where p4 calls price. The bytes are consumed by estimate and never collected. Measured: a 2,285 octet relay and a 4,262,645 octet relay both charge 6,591 units, a ratio of 1.0000 against a payload ratio of 1,865. So a broker on canonical bills uploads and serves downloads free. Rates are left set below so the machinery is live and the charge is visible; when the halt is fixed upstream the served direction starts billing with no config change.",
   "on": {
     "start": [
       {
         "device": "location@1.0",
         "path": "node",
         "method": "GET",
-        "hook": { "result": "ignore" }
+        "hook": {
+          "result": "ignore"
+        }
       }
     ],
     "request": [
