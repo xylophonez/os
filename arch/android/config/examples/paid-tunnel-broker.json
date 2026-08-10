@@ -1,37 +1,75 @@
 {
-  "_note": "A LapEE running as a tunnel broker that charges for the traffic it carries, and publishes a location record so it can be found. Replace the signers, the device pins, the ledger address and location-url with your own.",
-  "_note-rates": "metering@1.0 sizes the bodies P4 gives it: request-bytes is what arrives at this node, response-bytes is what it returns. Which one bills a relay is not obvious -- a caller's upload arrives here as the RESULT of the tunnelled node's registration long-poll, so it bills as response-bytes, while a payload the tunnel serves back arrives as the REQUEST of that node's response POST. Both are set to 1 below, which is what the measurement in the billing note used.",
-  "_note-price": "1 base unit per byte, roughly $2/TB: an AO token is 1e12 base units and trades around $2. Sizes are of the ETF encoding, not wire octets, so calibrate against observed traffic.",
+  "_note": "A LapEE tunnel broker that meters the traffic it carries, charges a renewable recharging ledger, and publishes a location record. Replace the location URL and economic policy before deployment.",
   "trusted-device-signers": [
     "kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI",
-    "ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k"
+    "ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k",
+    "vZY2XY1RD9HIfWi8ift-1_DnHLDadZMWrufSh-_rKF0"
   ],
   "trusted-devices": {
     "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0",
-    "p4@1.0": "LCzufj9RRui3F1jfkx0_9_PYhRAwGXm1vxJT0UzLihs"
+    "p4@1.0": "LCzufj9RRui3F1jfkx0_9_PYhRAwGXm1vxJT0UzLihs",
+    "recharging-ledger@1.0": "PQWZKA08XGsvJE-Pt2cZ_X9hLgRLmeGu-dqfqLaE3vE",
+    "recharger-rates-router@1.0": "zo0x8qxjf5qOhlJl8c8I2H1h1mQo7A6HLmcXgvHKPrg",
+    "recharger-ao-balance@1.0": "K7qr20zO3qJM5F3DyvPatXk9AcPgg9TDW00fC46USAA",
+    "recharger-ao-mint@1.0": "n5UA2a729DIl9Qc9_CCafJfLRDI0TJUGs4I9J21LTBY"
   },
   "metering-rates": {
     "request-bytes": 1,
     "response-bytes": 1,
     "beam-reductions": 0
   },
-  "_note-ledger": "Seed each node allowed to rent a tunnel. 1e12 base units is 1 AO, about 1 TB of egress at the rate above. Seed generously while testing: a 402 writes the negative balance before testing it and never reverses it, and requeued deliveries re-charge per dispatch.",
-  "simple-pay-ledger": {
-    "REPLACE-WITH-TUNNELLED-NODE-ADDRESS": 1000000000000
+  "_note-metering": "metering@1.0 prices the ETF-encoded bodies P4 supplies. One ledger unit per measured byte is monotone but is not wire-octet billing; calibrate it against observed traffic.",
+  "recharging-ledger-max": 25000000,
+  "recharging-ledger-recharge": 0,
+  "recharging-ledger-period": 1,
+  "recharging-ledger-grace": 0,
+  "recharging-ledger-exempt": [],
+  "recharging-ledger-rates-timeout": 4000,
+  "recharging-ledger-rates": {
+    "device": "recharger-rates-router@1.0",
+    "strategy": "max",
+    "default-rate": 0,
+    "rates-providers": [
+      {
+        "device": "recharger-ao-balance@1.0",
+        "state-node": "https://state.forward.computer",
+        "token-process": "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc",
+        "base-rate": 0,
+        "balance-step": 1000000000000,
+        "rate-step": 1000
+      },
+      {
+        "device": "recharger-ao-mint@1.0",
+        "gateway-node": "https://arweave.net",
+        "mint-process": "NTE-RcHEeO15MYMUbXwWytRxn_IUJmXPKPOFVc5qZcg",
+        "ao-token": "0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc",
+        "mint-token": "AO",
+        "account-field": "recipient",
+        "base-rate": 0,
+        "mint-bps-step": 100,
+        "rate-step": 1000,
+        "page-size": 100
+      }
+    ]
   },
-  "_note-location": "The location@1.0 start hook publishes a signed record naming this node's public URL, which is how clients discover it. location-url is published verbatim and permanently; left unset it is built from node_host and port and claims http://localhost:8734. init prepends this hook to the enforced measurement and zone hooks, so both still run and measurement still measures the final node.",
+  "_note-ledger": "Each account starts with a 25 MB trial bucket and no baseline refill. The router grants the larger entitlement: 1,000 units/s per whole AO held, or per 1% share of the latest AO mint. This is renewable token-gated quota, not settlement to the operator. Ledger state is intentionally broker-local and resets when its HyperBEAM VM restarts.",
   "location-url": "https://REPLACE-WITH-YOUR-PUBLIC-TUNNEL-URL",
   "location-ttl": 2419200000,
-  "_note-hooks": "p4@1.0 must precede tunnel@1.0 in on/request: p4 opens the metering session in the request hook and prices it in the response hook, and metering@1.0 measures between the two. Reverse the order and nothing is priced.",
-  "_note-billing": "WHAT IS BILLED TODAY, measured 2026-08-09 on tunnel@1.0 49d5fa8. Traffic a caller sends THROUGH the tunnel is billed: it arrives as the result of the tunnelled node's registration long-poll, whose hook chain completes normally. Traffic the tunnel SERVES BACK is not: the node posts it to /~tunnel@1.0/response, the tunnel device answers that hook with {error, _} to mean 'handled', hb_hook:execute_handlers halts on any non-ok status, and dev_meta then skips its response hook -- which is where p4 calls price. The bytes are consumed by estimate and never collected. Measured: a 2,285 octet relay and a 4,262,645 octet relay both charge 6,591 units, a ratio of 1.0000 against a payload ratio of 1,865. So a broker on canonical bills uploads and serves downloads free. Rates are left set below so the machinery is live and the charge is visible; when the halt is fixed upstream the served direction starts billing with no config change.",
+  "location-codec": "ans104@1.0",
+  "bundler-ans104": "https://up.arweave.net:443",
+  "_note-location": "The signed location record is permanent. The POST/self/commit-request hook refreshes it through the explicit production ANS-104 bundler.",
+  "_note-hooks": "p4@1.0 must precede tunnel@1.0 in on/request. The tunnel response hook must return ok after accepting a payload so P4's response hook can collect the measured response-byte charge.",
+  "_note-billing": "Canonical tunnel commit 49d5fa8 still halts the response-hook chain after accepting /~tunnel@1.0/response, so served payloads bill flat. The review branch fix/response-hook-continuation changes that one successful return to ok; replace the tunnel implementation pin after that branch is reviewed and permanently published.",
   "on": {
     "start": [
       {
         "device": "location@1.0",
         "path": "node",
-        "method": "GET",
+        "method": "POST",
+        "target": "self",
         "hook": {
-          "result": "ignore"
+          "result": "ignore",
+          "commit-request": true
         }
       }
     ],
@@ -39,7 +77,7 @@
       {
         "device": "p4@1.0",
         "pricing-device": "metering@1.0",
-        "ledger-device": "simple-pay@1.0"
+        "ledger-device": "recharging-ledger@1.0"
       },
       {
         "device": "tunnel@1.0",
@@ -49,7 +87,7 @@
     "response": {
       "device": "p4@1.0",
       "pricing-device": "metering@1.0",
-      "ledger-device": "simple-pay@1.0"
+      "ledger-device": "recharging-ledger@1.0"
     }
   }
 }

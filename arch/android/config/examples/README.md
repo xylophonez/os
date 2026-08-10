@@ -5,6 +5,22 @@ picker (they land in `no_backup/boot-config/next.json` and are merged over the
 measured base config on the next boot). They are not the base config and are not
 part of the boot measurement's device set.
 
+## `paid-tunnel-broker.json`
+
+Turns a LapEE into a metered public tunnel broker. Payment is composed as
+`p4 -> metering -> recharging-ledger`; the tunnel device contains no pricing
+or account policy.
+
+The included economics are pilot defaults: a 25 MB initial bucket, no free
+refill, and the larger of two AO-derived refill entitlements. This is renewable
+token-gated quota, not settlement to the operator. The ledger is deliberately
+ephemeral and resets when the broker's HyperBEAM VM restarts.
+
+The config retains canonical `tunnel@1.0` until the response-hook continuation
+branch is reviewed and permanently published. Canonical commit `49d5fa8` bills
+served payloads flat; replace its implementation pin before claiming
+bidirectional byte billing.
+
 ## `bundler-zone.json`
 
 Makes the node a paid bundler behind a reverse tunnel, and joins a zone.

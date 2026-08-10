@@ -71,11 +71,17 @@ waste your afternoon.
 **A domain with API-driven DNS**, for the wildcard certificate. Wildcards force
 DNS-01 validation; there is no HTTP-01 path for `*.example.com`.
 
-**A published `tunnel@1.0`**, pinned by Arweave ID. The pins used here:
+**Published device implementations**, pinned by Arweave ID. The pins used by
+the paid-broker example are:
 
 | Device | Implementation ID |
 |---|---|
-| `tunnel@1.0` | `u3K9cV05p14IZ_t0dWTptuu87J1NT-LhgirldS9SsVM` |
+| `tunnel@1.0` | `SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0` |
+| `p4@1.0` | `LCzufj9RRui3F1jfkx0_9_PYhRAwGXm1vxJT0UzLihs` |
+| `recharging-ledger@1.0` | `PQWZKA08XGsvJE-Pt2cZ_X9hLgRLmeGu-dqfqLaE3vE` |
+| `recharger-rates-router@1.0` | `zo0x8qxjf5qOhlJl8c8I2H1h1mQo7A6HLmcXgvHKPrg` |
+| `recharger-ao-balance@1.0` | `K7qr20zO3qJM5F3DyvPatXk9AcPgg9TDW00fC46USAA` |
+| `recharger-ao-mint@1.0` | `n5UA2a729DIl9Qc9_CCafJfLRDI0TJUGs4I9J21LTBY` |
 | `acme@1.0` | `72XYKqaXO5JVj6_LMpkNVjWrv1wGQH3ZW9_2eNyQVsk` |
 
 A cold appliance fetches these through its gateway store on first resolve —
@@ -128,7 +134,7 @@ Broker role — `config.json` in the repo root:
 {
   "trusted-device-signers": ["kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI"],
   "trusted-devices": {
-    "tunnel@1.0": "u3K9cV05p14IZ_t0dWTptuu87J1NT-LhgirldS9SsVM",
+    "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0",
     "acme@1.0":   "72XYKqaXO5JVj6_LMpkNVjWrv1wGQH3ZW9_2eNyQVsk"
   },
   "on": {
@@ -142,7 +148,7 @@ Client role — same shape, but a start hook instead:
 ```json
 {
   "trusted-device-signers": ["kaYP9bJtpqON8Kyy3RbqnqdtDBDUsPTQTNUCvZtKiFI"],
-  "trusted-devices": { "tunnel@1.0": "u3K9cV05p14IZ_t0dWTptuu87J1NT-LhgirldS9SsVM" },
+  "trusted-devices": { "tunnel@1.0": "SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0" },
   "on": {
     "start": [{
       "device": "tunnel@1.0", "method": "POST", "path": "connect",
@@ -158,6 +164,18 @@ Two details that are load-bearing: hb config keys are **dash-form binaries**
 `"hook": {"result": "ignore"}` or its return value breaks the next handler in
 the chain. Never name a hook function `start` — it collides with hb dispatch;
 the convention is `run`, `boot` or `connect`.
+
+Discovery records use ANS-104 and the production bundler explicitly:
+
+```json
+"location-codec": "ans104@1.0",
+"bundler-ans104": "https://up.arweave.net:443"
+```
+
+Run the location boot hook as `POST` with `target: self` and
+`hook.commit-request: true`, as in the example. `bundler-ans104` is a peer URL;
+do not put it under `bundler-httpsig`, which selects a different commitment
+path.
 
 ## 5. Flash and verify
 
@@ -372,14 +390,13 @@ nor your workstation — or you are only proving the LAN works.
 A broker can run free — leave `metering-rates` unset and everything here is
 inert. This section is for operators who want to be paid.
 
-### Where the meter lives
+### Keep the responsibilities separate
 
-`metering@1.0` prices the node. `p4@1.0` hands it the inbound request when it
-opens a session and the result when it closes one, and it sizes both:
-`request-bytes` for what arrives, `response-bytes` for what the node returns.
-These sit beside `beam-reductions`, so a node is priced on the traffic it
-carries as well as the compute it does. The tunnel device holds no pricing
-logic at all.
+`tunnel@1.0` transports traffic and has no price or account policy. `p4@1.0`
+opens and closes the payment lifecycle. `metering@1.0` prices request and
+response bytes. `recharging-ledger@1.0` owns each account's renewable capacity,
+and `recharger-rates-router@1.0` optionally selects a refill rate from read-only
+providers.
 
 `p4@1.0` must come **before** `tunnel@1.0` in `on/request`, or the tunnel is
 handed no relay target and the broker answers callers locally — a silent 404,
@@ -400,14 +417,13 @@ charge ratio of 1.0000 against a payload ratio of 1,865.
 
 The cause is a hook-chain halt, not a meter. A tunnelled node posts its payload
 to `/~tunnel@1.0/response`; the tunnel device answers that hook with
-`{error, _}` to mean *handled*; `hb_hook:execute_handlers` halts on any non-ok
-status; and `dev_meta` then skips its response hook — which is where `p4@1.0`
-calls `price`. The bytes are consumed by `estimate` and never collected.
+`{error, _}` to mean *handled*; the hook dispatcher halts on any non-ok status,
+so the later `p4@1.0` response hook never calls `price`. The bytes are consumed
+by `estimate` and never collected.
 
-So **a broker today sells uploads and gives downloads away**. If a tunnel's job
-is to serve a node's content to the public, that is most of its traffic. Set
-rates knowing this; when the halt is fixed upstream the served direction starts
-billing with no config change.
+The focused review branch changes the successful response-hook return to `ok`
+and leaves failures as errors. Until that branch is reviewed, permanently
+published and pinned, canonical brokers still bill served payloads flat.
 
 ### Setting a rate
 
@@ -419,37 +435,36 @@ billing with no config change.
 }
 ```
 
-One base unit per byte is roughly **$2/TB**: an AO token is 1e12 base units and
-trades around $2. Sizes are of the ETF encoding, not wire octets — stable and
-monotone in payload size, but not reproducible by a payer from the bytes it
-sent, and the ratio to wire size varies by request shape. Calibrate against
-your own traffic.
+ETF size is stable and monotone in payload size, but is not wire-octet billing.
+Calibrate it against observed traffic before attaching a currency value.
 
-`tunnel-seconds` is also available and does bill: the tunnel device consumes it
-on the register path, which completes its hook chain normally. A ~4.3 s hold at
-rate 1e6 charged 4–5M units. It measures how long a registration waited, so at
-any non-zero rate a tunnelled node pays to sit idle.
+The example ledger policy starts an account at 25,000,000 units, grants no
+baseline refill, and uses strict zero grace. Its `max` strategy takes the larger
+of the AO-balance and AO-mint entitlements instead of counting the same signal
+twice. `sum` is available when entitlements are deliberately additive.
 
 ### Who pays
 
-The tunnelled node, from its own balance, seeded in `simple-pay-ledger` against
-its address. Not the caller: `dev_simple_pay` derives the payer from the request
-signers, and a public tunnel's callers are anonymous by construction. The node
-renting the hostname pays for the traffic that hostname attracts, which is also
-the party benefiting and the only one holding a balance. An anonymous caller's
-session is priced but uncollected — no charge, and no 402.
+The tunnelled node pays because its signed registration and response requests
+identify it; anonymous public callers do not have broker accounts. The node
+renting the hostname pays for the traffic that hostname attracts.
 
-Seed generously while testing. A 402 writes the negative balance before testing
-it and never reverses it, and requeued deliveries re-charge per dispatch, so an
-exhausted balance becomes a burn loop rather than a clean refusal.
+This is renewable token-gated quota, not settlement to the tunnel operator.
+The rates providers do not transfer or lock AO. A commercial service still
+needs an explicit purchase, reconciliation and withdrawal story.
+
+Ledger state is deliberately local to the broker's HyperBEAM VM. Restarting it
+resets account buckets; keeping the operator service available is part of the
+pilot operating model. The timeout review branch makes one narrow safety fix:
+it returns 503 without unregistering, replacing or blindly retrying the ledger
+process.
 
 ### Checking it works
 
-Relay something small and something several megabytes large and compare the
-balance delta. Zero with rates set means nothing is metered or it is billed to
-nobody. A flat charge on the served direction is expected — see above. Uploads
-should scale with payload; if they do not, check that `p4@1.0` precedes
-`tunnel@1.0`.
+Query the payer through `~p4@1.0/balance`, relay something small and something
+several megabytes large, then query again. Both deltas must be positive. Once
+the response-hook review pin is installed, the large served response must cost
+far more than the small one; a flat result is then a failure.
 
 `scripts/qemu-paid-tunnel-check.sh` runs this against an image before you flash
 it, and `scripts/live-paid-tunnel-test.sh` against a booted appliance.
