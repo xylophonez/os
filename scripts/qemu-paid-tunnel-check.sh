@@ -21,6 +21,9 @@ LAN_PORT=${LAN_PORT:-18735}
 LAN_IP=${LAN_IP:-$(ip -4 addr show scope global | grep -oP 'inet \K192\.168\.[0-9.]+' | head -1)}
 PHONE_IP=${PHONE_IP:-192.168.1.125}
 PHONE_ADDR=${PHONE_ADDR:-VP9ZEXVi7DpeqtP0wzXrk0_abafEkfSEQXi6CtN4igA}
+ANS104_BUNDLER=https://up.arweave.net:443
+CANONICAL_TUNNEL=SVKRgrshzPceeBdnknJNvR-m2zQ0mFYJvjMx0rSscW0
+ALLOW_CANONICAL_TUNNEL=${ALLOW_CANONICAL_TUNNEL:-0}
 PKG=org.permaweb.andee
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-900}
 USE_PHONE=1
@@ -66,13 +69,43 @@ CFG=$(docker run --rm -v "$PWD:/w" -w /w lapee-build:local bash -c '
     mtype -i /tmp/e.img ::/EFI/boot/config.json' 2>/dev/null)
 if [[ -n "$CFG" ]]; then
     PIN=$(jq -r '."trusted-devices"."tunnel@1.0" // "none"' <<<"$CFG")
+    LEDGER_PIN=$(jq -r '."trusted-devices"."recharging-ledger@1.0" // "none"' <<<"$CFG")
     HOOKS=$(jq -r '[.on.request[]?.device] | join(",")' <<<"$CFG")
+    LEDGER_DEVICE=$(jq -r '.on.request[0]."ledger-device" // "none"' <<<"$CFG")
+    BUNDLER=$(jq -r '."bundler-ans104" // "none"' <<<"$CFG")
+    LOCATION_CODEC=$(jq -r '."location-codec" // "none"' <<<"$CFG")
+    LOCATION_REFRESH=$(jq -r '([.on.start[]? | select(.device == "location@1.0")] | first // {}) | [(.method // ""), (.target // ""), (.hook."commit-request" // false)] | @tsv' <<<"$CFG")
     note "tunnel pin : $PIN"
+    note "ledger pin : $LEDGER_PIN"
     note "hook order : $HOOKS"
+    note "ledger     : $LEDGER_DEVICE"
     note "rates      : $(jq -c '."metering-rates" // {}' <<<"$CFG")"
+    note "bundler    : $BUNDLER"
+    note "loc codec  : $LOCATION_CODEC"
     [[ "$PIN" != none ]] && ok "tunnel@1.0 is pinned" || bad "no tunnel@1.0 pin"
+    [[ "$LEDGER_PIN" != none ]] && ok "recharging-ledger@1.0 is pinned" || bad "no recharging-ledger@1.0 pin"
+    if [[ "$PIN" == "$CANONICAL_TUNNEL" ]]; then
+        if [[ "$ALLOW_CANONICAL_TUNNEL" == 1 ]]; then
+            note "canonical tunnel allowed for integration only; release gate is bypassed"
+        else
+            bad "canonical tunnel cannot pass the paid-tunnel release gate"
+            note "set ALLOW_CANONICAL_TUNNEL=1 only for integration testing"
+        fi
+    fi
     [[ "$HOOKS" == p4@1.0,* ]] && ok "p4 runs before the tunnel" \
         || bad "p4 must precede tunnel@1.0 in on/request (got: $HOOKS)"
+    [[ "$LEDGER_DEVICE" == recharging-ledger@1.0 ]] \
+        && ok "p4 charges the recharging ledger" \
+        || bad "p4 ledger is $LEDGER_DEVICE"
+    [[ "$LOCATION_CODEC" == ans104@1.0 ]] \
+        && ok "location records use ANS-104" \
+        || bad "location codec is not ANS-104 (got: $LOCATION_CODEC)"
+    [[ "$BUNDLER" == "$ANS104_BUNDLER" ]] \
+        && ok "ANS-104 bundler is the production endpoint" \
+        || bad "ANS-104 bundler is missing or unexpected (got: $BUNDLER)"
+    [[ "$LOCATION_REFRESH" == $'POST\tself\ttrue' ]] \
+        && ok "location boot hook refreshes and signs the published record" \
+        || bad "location boot hook would reuse a cached record (got: $LOCATION_REFRESH)"
     NONZERO=$(jq -r '[."metering-rates"//{} | to_entries[] | select(.value>0) | .key] | join(",")' <<<"$CFG")
     [[ -n "$NONZERO" ]] && ok "non-zero rates: $NONZERO" || note "all rates zero (charge checks will be skipped)"
     # Nothing reports tunnel-* or meta-* resources. A config pricing them bills
@@ -83,6 +116,23 @@ if [[ -n "$CFG" ]]; then
         [[ "$NONZERO" == *bytes* ]] && ok "a metering@1.0 byte resource is priced" \
             || bad "no *-bytes resource priced - carried traffic will not be billed"
     fi
+    LEDGER_POLICY=$(jq -r '[
+        (."recharging-ledger-grace" == 0),
+        (."recharging-ledger-rates".device == "recharger-rates-router@1.0"),
+        (."recharging-ledger-rates".strategy == "max"),
+        (."recharging-ledger-rates"."default-rate" == 0)
+    ] | all' <<<"$CFG")
+    [[ "$LEDGER_POLICY" == true ]] \
+        && ok "strict ephemeral ledger and conservative rates router are configured" \
+        || bad "ledger grace or rates-router policy is incomplete"
+    REQUIRED_RATE_PINS=$(jq -r '[
+        ."trusted-devices"."recharger-rates-router@1.0",
+        ."trusted-devices"."recharger-ao-balance@1.0",
+        ."trusted-devices"."recharger-ao-mint@1.0"
+    ] | all(. != null and . != "")' <<<"$CFG")
+    [[ "$REQUIRED_RATE_PINS" == true ]] \
+        && ok "rates router and provider implementations are pinned" \
+        || bad "a rates router/provider implementation pin is missing"
 else
     bad "could not read the ESP from the image"
 fi
@@ -175,12 +225,24 @@ curl -fsS -m120 -H "accept: application/json" -H "accept-bundle: true" "$B/~meas
 say "operator config reached the node"
 LIVE=$(curl -fsS -m60 "$B/~meta@1.0/info" -H 'accept: application/json' -H 'accept-bundle: true' 2>/dev/null)
 LIVEPIN=$(jq -r '."trusted-devices"."tunnel@1.0" // "none"' <<<"$LIVE" 2>/dev/null)
+LIVELEDGERPIN=$(jq -r '."trusted-devices"."recharging-ledger@1.0" // "none"' <<<"$LIVE" 2>/dev/null)
+LIVEBUNDLER=$(jq -r '."bundler-ans104" // "none"' <<<"$LIVE" 2>/dev/null)
+LIVELOCATIONCODEC=$(jq -r '."location-codec" // "none"' <<<"$LIVE" 2>/dev/null)
 if [[ "$LIVEPIN" == "$PIN" && "$PIN" != none ]]; then
     ok "node is running the image's config (pin $LIVEPIN)"
 else
     bad "node did NOT apply the operator config (image pin $PIN, node reports $LIVEPIN)"
     note "config rejected at boot, or ESP unreadable on this platform - not a device-fetch fault"
 fi
+[[ "$LIVELEDGERPIN" == "$LEDGER_PIN" && "$LEDGER_PIN" != none ]] \
+    && ok "node is running the image's recharging ledger pin" \
+    || bad "ledger pin did not reach the node (image $LEDGER_PIN, node $LIVELEDGERPIN)"
+[[ "$LIVELOCATIONCODEC" == "$LOCATION_CODEC" && "$LOCATION_CODEC" == ans104@1.0 ]] \
+    && ok "ANS-104 location codec is live in the node config" \
+    || bad "location codec did not reach the node (got: $LIVELOCATIONCODEC)"
+[[ "$LIVEBUNDLER" == "$ANS104_BUNDLER" ]] \
+    && ok "production ANS-104 bundler is live in the node config" \
+    || bad "ANS-104 bundler did not reach the node (got: $LIVEBUNDLER)"
 
 say "devices resolve at runtime"
 ST=""
@@ -201,10 +263,20 @@ if grep -q '"status":200' <<<"$RATES" && [[ -n "$NONZERO" ]] && grep -q "${NONZE
 else
     bad "operator metering-rates not applied (node shows defaults only)"
 fi
-LEDGER=$(curl -fsS -m30 "$B/~meta@1.0/info/simple-pay-ledger" -H 'accept: application/json' 2>/dev/null)
-OPEN=$(jq -r --arg a "$PHONE_ADDR" '.[$a] // empty' <<<"$LEDGER" 2>/dev/null)
+bal() {
+    curl -fsS -G -m30 "$B/~p4@1.0/balance" \
+        --data-urlencode "target=$PHONE_ADDR" \
+        -H 'accept: application/json' 2>/dev/null \
+        | jq -er '
+            if type == "number" then .
+            elif type == "string" then tonumber
+            elif (.body? | type) == "number" then .body
+            elif (.body? | type) == "string" then (.body | tonumber)
+            else error("no numeric balance") end'
+}
+OPEN=$(bal)
 [[ -n "$OPEN" && "$OPEN" =~ ^[0-9]+$ && "$OPEN" -gt 0 ]] \
-    && ok "payer seeded with $OPEN" || bad "payer $PHONE_ADDR has no balance (got: ${OPEN:-empty})"
+    && ok "payer has recharging-ledger capacity $OPEN" || bad "payer $PHONE_ADDR has no balance (got: ${OPEN:-empty})"
 
 # ---------- a real client, a real relay, a real charge ----------------------
 if (( USE_PHONE )) && adb devices 2>/dev/null | grep -q device$; then
@@ -237,42 +309,29 @@ if (( USE_PHONE )) && adb devices 2>/dev/null | grep -q device$; then
 import base64,sys
 a='$PHONE_ADDR'; raw=base64.urlsafe_b64decode(a+'='*(-len(a)%4))
 print(base64.b32encode(raw).decode().lower().rstrip('='))")
-        bal() { curl -fsS -m25 "$B/~meta@1.0/info/simple-pay-ledger" -H 'accept: application/json' 2>/dev/null | jq -r --arg a "$PHONE_ADDR" '.[$a] // 0'; }
         say "relay + charge"
-        I0=$(bal); sleep 30; I1=$(bal); IDLE=$((I0-I1))
-        note "idle drift over 30s: $IDLE"
-
         A=$(bal)
         S=$(curl -s -m120 -o /dev/null -w '%{size_download}' -H "Host: $B32.tunnel.example.com" "$B/~hyperbuddy@1.0/index" 2>/dev/null)
-        sleep 4; C=$(bal); SMALL=$((A-C))
+        C=$(bal); SMALL=$((A-C))
         [[ "${S:-0}" -gt 0 ]] && ok "small relay served: $S bytes" || bad "small relay failed"
         note "charged $SMALL"
 
         A=$(bal)
         L=$(curl -s -m300 -o /dev/null -w '%{size_download}' -H "Host: $B32.tunnel.example.com" "$B/~hyperbuddy@1.0/bundle.js" 2>/dev/null)
-        sleep 6; C=$(bal); LARGE=$((A-C))
+        C=$(bal); LARGE=$((A-C))
         [[ "${L:-0}" -gt 0 ]] && ok "large relay served: $L bytes" || bad "large relay failed"
         note "charged $LARGE"
 
-        # A charge of zero with rates set means nothing is being metered, or it
-        # is billed to nobody. That is always a failure.
-        #
-        # A charge that does not grow with the payload is the documented state
-        # of a broker serving traffic back: the tunnel answers the response POST
-        # hook with {error, _}, the hook chain halts, and p4 never prices the
-        # request carrying the payload. Reported, not failed, so this harness
-        # keeps passing on canonical -- and reports the change the moment the
-        # halt is fixed upstream.
         if [[ -n "$NONZERO" ]]; then
             if (( SMALL <= 0 || LARGE <= 0 )); then
                 bad "a relay charged nothing with rates set (${SMALL}, ${LARGE})"
             elif (( LARGE > SMALL * 100 )); then
                 ok "served payload is billed proportionally (large/small = $((LARGE / SMALL))x)"
-                note "the response-hook halt appears to be fixed on this build"
+            elif [[ "$PIN" == "$CANONICAL_TUNNEL" && "$ALLOW_CANONICAL_TUNNEL" == 1 ]]; then
+                ok "canonical integration path billed (${SMALL} then ${LARGE} units)"
+                note "flat served-payload billing is accepted only by the explicit integration override"
             else
-                ok "billing is live (${SMALL} then ${LARGE} units)"
-                note "served payload is billed flat - expected on canonical tunnel@1.0"
-                note "callers' uploads through the tunnel do bill by size; downloads do not"
+                bad "served payload did not bill proportionally (${SMALL} then ${LARGE} units)"
             fi
         fi
     fi
