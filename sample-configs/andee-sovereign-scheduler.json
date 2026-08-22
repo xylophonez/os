@@ -1,0 +1,26 @@
+{
+  "_note": "Sovereign-scheduler overlay: this node schedules and computes over its operator's own processes and exposes no gateway surface. Client-side routing sends gateway operations to public infrastructure; only scheduling and compute for the node's own processes terminate here.",
+  "arweave-scheduler-from": "**[Arweave block height to sync from]**",
+  "arweave-scheduler-confirmation-depth": 3,
+  "_note-confirmation-depth": "Pinned explicitly rather than inherited: the node default of 10 blocks is conservative for a scheduler serving only its own processes, and production deployments run 3 to shorten assignment finality. Raise it if your processes cannot tolerate deeper reorgs.",
+  "arweave-scheduler-header-workers": 4,
+  "_note-header-workers": "Phone-scale: keep header workers small (2-8) so scheduler sync does not starve the runtime on mobile SoCs.",
+  "arweave-scheduler-sync-chunk": 25,
+  "trusted-devices": {
+    "tunnel@1.0": "**[tunnel@1.0 device pin]**"
+  },
+  "on": {
+    "start": [
+      {
+        "device": "tunnel@1.0",
+        "path": "connect",
+        "method": "POST",
+        "peer": "https://****tunnel-host****",
+        "workers": 8,
+        "hook": {
+          "result": "ignore"
+        }
+      }
+    ]
+  }
+}
