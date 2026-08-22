@@ -6,8 +6,10 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import java.io.File
 
@@ -17,11 +19,14 @@ class AndeeService : Service() {
     private var inferenceManager: AndeeInferenceManager? = null
     private var hyperbeamRuntime: HyperbeamRuntime? = null
     private var starterThread: Thread? = null
+    private var wifiLock: WifiManager.WifiLock? = null
+    private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var stopping = false
 
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, notification(), foregroundType())
+        acquireRuntimeLocks()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -112,7 +117,38 @@ class AndeeService : Service() {
 
     override fun onDestroy() {
         stopRuntime()
+        releaseRuntimeLocks()
         super.onDestroy()
+    }
+
+    private fun acquireRuntimeLocks() {
+        if (wifiLock == null) {
+            // High-perf mode keeps the radio serving while the screen is off on
+            // API 29-33; API 34+ coerces it to low-latency mode. Held for the
+            // service lifetime and released in onDestroy().
+            @Suppress("DEPRECATION")
+            wifiLock = applicationContext.getSystemService(WifiManager::class.java)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, LOCK_TAG)
+                .also {
+                    it.setReferenceCounted(false)
+                    it.acquire()
+                }
+        }
+        if (wakeLock == null) {
+            wakeLock = getSystemService(PowerManager::class.java)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, LOCK_TAG)
+                .also {
+                    it.setReferenceCounted(false)
+                    it.acquire()
+                }
+        }
+    }
+
+    private fun releaseRuntimeLocks() {
+        wifiLock?.takeIf { it.isHeld }?.release()
+        wifiLock = null
+        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLock = null
     }
 
     private fun terminateProcess(startId: Int) {
@@ -180,6 +216,7 @@ class AndeeService : Service() {
         const val ACTION_STOP = "org.permaweb.andee.action.STOP"
         const val ACTION_TERMINATE = "org.permaweb.andee.action.TERMINATE"
         private const val TAG = "AndeeService"
+        private const val LOCK_TAG = "andee:runtime"
         private const val CHANNEL_ID = "andee-runtime"
         private const val NOTIFICATION_ID = 7341
     }
