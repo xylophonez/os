@@ -15,6 +15,19 @@ AndEE local-inference provider and authenticated remote providers behind the
 ordinary `inference@1.0` multiplexer. These are choices made by this example,
 not special properties of PermawebOS, Ouroboros, or any architecture image.
 
+`andee-sovereign-scheduler.json` expresses a narrower role: the AndEE node
+acts as sovereign scheduler and compute host over its operator's own processes
+and offers no gateway surface. It composes a `tunnel@1.0` connect hook for
+reachability with explicit `arweave-scheduler-*` tuning and installs no
+request hooks; client-side routing sends gateway operations to public
+infrastructure, so only scheduling and compute for the node's own processes
+terminate here. The `arweave-scheduler-confirmation-depth` of 3 is an explicit
+choice made by this example (the node default is 10), and the file's `_note`
+keys record the reasoning. These are choices made by this example, not special
+properties of PermawebOS or AndEE. Replace
+`**[Arweave block height to sync from]**` with an integer block height in the
+private copy.
+
 Every `****` value must be replaced in a private copy before use. Replace
 `**[base32 encoded node address]**` with the base32 encoding of the boot node
 address. Never commit the private copy.
